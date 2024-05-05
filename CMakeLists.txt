@@ -1,12 +1,11 @@
 cmake_minimum_required(VERSION 3.0)
+project(pe_planner)
 
 if(APPLE)
     set(MACOS 1)
 elseif(UNIX AND NOT APPLE)
     set(LINUX 1)
 endif()
-
-project(quadrotor_mpc)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_BUILD_TYPE Release)

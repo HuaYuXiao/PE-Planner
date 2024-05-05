@@ -16,4 +16,4 @@ else
     fi
 fi
 
-make -j10
+make -j22

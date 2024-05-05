@@ -1,0 +1,12 @@
+<!-- ego_planner 仿真 -->
+<launch>
+    <!-- 启动全局规划算法 -->
+    <node pkg="pe_planner" type="planner_px4" name="planner_px4" output="screen" launch-prefix="gnome-terminal --">
+    </node>
+
+    <!-- 启动规划mission， 激光输入control_yaw_flag设为false，rgbd输入control_yaw_flag设为true -->
+    <node pkg="prometheus_mission" type="planning_mission" name="planning_mission" output="screen" launch-prefix="gnome-terminal --">
+        <param name="planning_mission/control_yaw_flag" value="false" type="bool"/>
+        <param name="planning_mission/sim_mode" value="true" type="bool"/>
+    </node>
+</launch>
