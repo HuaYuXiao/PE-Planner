@@ -1,0 +1,19 @@
+<!-- pe_planner 仿真 -->
+<launch>
+    <!-- 启动全局规划算法 -->
+    <node pkg="pe_planner" type="planner_px4" name="planner_px4" output="screen" launch-prefix="gnome-terminal --">
+        <!-- Define parameters -->
+        <param name="enable_dob" type="bool" value="true"/>
+        <param name="enable_mpcc" type="bool" value="true"/>
+        <param name="MAX_VEL" type="double" value="1.0"/>
+        <param name="MAX_ACC" type="double" value="1.6"/>
+        <param name="mu" type="double" value="1.0"/>
+        <param name="test_num" type="int" value="25"/>
+        <param name="online_replan" type="bool" value="false"/>
+    </node>
+
+    <!-- 启动规划mission， 激光输入control_yaw_flag设为false，rgbd输入control_yaw_flag设为true -->
+    <node pkg="prometheus_mission" type="planning_mission" name="planning_mission" output="screen" launch-prefix="gnome-terminal --">
+        <param name="planning_mission/control_yaw_flag" value="false" type="bool"/>
+    </node>
+</launch>
