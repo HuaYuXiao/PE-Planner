@@ -2,6 +2,12 @@
 
 **PE-Planner** is a performance-enhanced quadrotor motion planner for autonomous flight in complex and dynamic environments. It is proposed to significantly improve the performance of speed, safety, and disturbance rejection capability.
 
+![HitCount](https://img.shields.io/endpoint?url=https%3A%2F%2Fhits.dwyl.com%2FHuaYuXiao%2FPE-Planner.json%3Fcolor%3Dpink)
+![Static Badge](https://img.shields.io/badge/ROS-noetic-22314E?logo=ros)
+![Static Badge](https://img.shields.io/badge/OpenCV-4.2.0-5C3EE8?logo=opencv)
+![Static Badge](https://img.shields.io/badge/C%2B%2B-14-00599C?logo=cplusplus)
+![Static Badge](https://img.shields.io/badge/Ubuntu-20.04.6-E95420?logo=ubuntu)
+
 __Authors__: Jiaxin Qiu, Qingchen Liu, Jiahu Qin, Dewang Cheng, Yawei Tian and Qichao Ma
 
 <p align="center">
@@ -16,46 +22,23 @@ __Authors__: Jiaxin Qiu, Qingchen Liu, Jiahu Qin, Dewang Cheng, Yawei Tian and Q
 </p>
 
 
-## Table of Contents
+## Release Note
 
-* [Installation](#1-installation)
-* [Run Simulations](#2-run-simulations)
+- v1.1.0: Get parameters from the ROS parameter server
 
-## 1. Installation
-The project is developed on Ubuntu 20.04 (ROS Noetic). In simulations, it uses Gazebo as the simulator and PX4 as flight control software to achieve relatively realistic simulations. To avoid tedious configuration steps, a Docker image containing the simulation environment and PE-Planner is provided. Running the following commands to setup:
+
+## Installation
+
+In simulations, it uses Gazebo as the simulator and PX4 as flight control software to achieve relatively realistic simulations. To avoid tedious configuration steps, a Docker image containing the simulation environment and PE-Planner is provided. Running the following commands to setup:
 
 ```bash
 catkin_make install --source src/PE-Planner --build build/pe_planner
 ```
 
-## 2. Run Simulations
+## Run Simulations
 
 Simulation of the Nominal Case with Static and Dynamic Obstacles
 
 ```bash
 roslaunch pe_planner simulation.launch
 ```
-
-```bash
-docker exec -it pe-planner /bin/bash
-cd ~/pe-planner-simulation
-./startpx4.sh
-```
-Terminal 2:
-```bash
-xhost +
-docker exec -it pe-planner /bin/bash
-cd ~/pe-planner-simulation/PE-Planner
-git checkout dynamic_env_simulation
-rviz -d ./rviz/rviz.rviz
-```
-Terminal 3:
-```bash
-docker exec -it pe-planner /bin/bash
-cd ~/pe-planner-simulation/PE-Planner
-./build.sh
-./build/planner_px4 ./maps/map2.txt 1 1 6.0 3.0 1.0 25 0
-```
-The format of the command to run PE-Planner is
-```
-./build/planner_px4 [map_file] [enable MPCC (disabled it to use PID for comparison)] [enable GPIO] [max velocity in Kinodynamic searching] [max acceleration in Kinodynamic searching] [mu] [number of tests] [enable dynamic planning (disable it when enabling MPCC)]

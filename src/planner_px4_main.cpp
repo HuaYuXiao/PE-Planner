@@ -25,26 +25,29 @@ namespace plt = matplotlibcpp;
 constexpr int n_step = NominalMpcc::_n_step;
 
 int main(int argc, char **argv) {
+    // Initialize the ROS node
+    ros::init(argc, argv, "planner_px4");
+    ros::NodeHandle nh("~");
+
+    // Set the CPU affinity (if necessary)
     cpu_set_t mask;
     CPU_ZERO(&mask);
     CPU_SET(5, &mask);
     pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask);
 
-    bool enable_dob = (argv[2][0] == '1');
-    cout << (enable_dob == true ? "Enable DOB" : "Disable DOB") << endl;
+    // Get parameters from the ROS parameter server
+    bool enable_dob, enable_mpcc, online_replan;
+    double MAX_VEL, MAX_ACC, mu;
+    int test_num;
+    std::string logger_name;
 
-    bool enable_mpcc = (argv[3][0] == '1');
-    cout << (enable_mpcc == true ? "Enable MPCC" : "Disable MPCC") << endl;
-
-    double MAX_VEL = atof(argv[4]);
-    double MAX_ACC = atof(argv[5]);
-    cout << "MAX_VEL: " << MAX_VEL << " MAX_ACC: " << MAX_ACC << endl;
-    double mu = atof(argv[6]);
-    cout << "mu: " << mu << endl;
-    int test_num = atof(argv[7]);
-    cout << "test_num: " << test_num << endl;
-    bool online_replan = atoi(argv[8]) == 1;
-    cout << "online replanning: " << (online_replan == true ? "ON" : "OFF") << endl;
+    nh.getParam("enable_dob", enable_dob);
+    nh.getParam("enable_mpcc", enable_mpcc);
+    nh.getParam("MAX_VEL", MAX_VEL);
+    nh.getParam("MAX_ACC", MAX_ACC);
+    nh.getParam("mu", mu);
+    nh.getParam("test_num", test_num);
+    nh.getParam("online_replan", online_replan);
 
     Logger logger(string(enable_dob == true ? "enable-DOB" : "disable-DOB") + "-"
         + string(enable_mpcc == true ? "enable-MPCC" : "disable-MPCC") + "-test");
@@ -65,14 +68,12 @@ int main(int argc, char **argv) {
     distur_set[1] = 0.0;
     distur_set[2] = 0.0;
 
-    ros::init(argc, argv, "planner_px4");
-
     //PX4 interface
-    Px4Interface px4("iris_0");
+    Px4Interface px4("");
     // QuadSimulator px4(0.309);
 
-    //construct map
-    GridMap gridmap(argv[1]);
+    // TODO: construct map Ptr?
+    GridMap gridmap;
     gridmap.update_grid_map();
 
     //ros interface
