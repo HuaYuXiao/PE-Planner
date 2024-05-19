@@ -38,7 +38,6 @@ int main(int argc, char **argv) {
     // Get parameters from the ROS parameter server
     bool enable_dob, enable_mpcc, online_replan;
     double MAX_VEL, MAX_ACC, mu;
-    int test_num;
     std::string logger_name;
 
     nh.getParam("enable_dob", enable_dob);
@@ -46,7 +45,6 @@ int main(int argc, char **argv) {
     nh.getParam("MAX_VEL", MAX_VEL);
     nh.getParam("MAX_ACC", MAX_ACC);
     nh.getParam("mu", mu);
-    nh.getParam("test_num", test_num);
     nh.getParam("online_replan", online_replan);
 
     Logger logger(string(enable_dob == true ? "enable-DOB" : "disable-DOB") + "-"
@@ -207,439 +205,405 @@ int main(int argc, char **argv) {
 
     ros::Rate rate(50);
 
-    double avg_avg_vel = 0.;
-    double avg_max_vel = 0.;
-    double avg_min_dist = 0.;
-    int fail_cnt = 0;
+    vector<DynObs> dynobs;
 
-#define TEST 1
-#if TEST
-    for (int i = 0; i < test_num; i++) {
-#endif
+    for (double p = 5; p < 45; p += 2.0) {
+        dynobs.push_back(DynObs(0.2, 1.0, Vector2d(p, 3), Vector2d(p, 7)));
+    }
 
-        vector<DynObs> dynobs;
+    auto t0 = chrono::steady_clock::now();
 
-        for (double p = 5; p < 45; p += 2.0) {
-            dynobs.push_back(DynObs(0.2, 1.0, Vector2d(p, 3), Vector2d(p, 7)));
+    double fan_ang = 0.;
+    auto start_time = ros::Time::now();
+    while((ros::Time::now() - start_time).toSec() < 6.0 && ros::ok()) {
+        Vector3d pos = px4.pos();
+        Vector3d vel = px4.vel();
+        Vector4d quat = px4.quat();
+        ros_inte.publish_quadmesh(pos, quat);
+        auto p = UniformBspline::getBsplineValue(t_sample, ctrl_pts, 3 * t_sample + 1e-6, 3);
+        px4.set_pos(p[0], p[1], p[2], 1.57);
+        rate.sleep();
+        fan_ang += M_PI / 180.0 * 10;
+        for (auto &o : dynobs) {
+            o.update(0.02);
         }
+        ros_inte.publish_dyn_obs(dynobs);
+        ros::spinOnce();
+    }
 
-        auto t0 = chrono::steady_clock::now();
-        
-        double fan_ang = 0.;
-        auto start_time = ros::Time::now();
-        while((ros::Time::now() - start_time).toSec() < 6.0 && ros::ok()) {
-            Vector3d pos = px4.pos();
-            Vector3d vel = px4.vel();
-            Vector4d quat = px4.quat();
-            ros_inte.publish_pose(pos, quat);
-            ros_inte.publish_quadmesh(pos, quat);
-            auto p = UniformBspline::getBsplineValue(t_sample, ctrl_pts, 3 * t_sample + 1e-6, 3);
-            px4.set_pos(p[0], p[1], p[2], 1.57);
-            rate.sleep();
-            ros_inte.publish_fanmesh(Vector3d(8.6, 4.0, 1.0), Vector3d(0, fan_ang, M_PI / 180.0 * 90.));
-            fan_ang += M_PI / 180.0 * 10;
-            for (auto &o : dynobs) {
-                o.update(0.02);
-            }
-            ros_inte.publish_dyn_obs(dynobs);
-            ros::spinOnce();
-        }
-        
-        double omega = 14;
-        double l1 = 3 * omega - 1;
-        double l2 = 3 * omega * omega - 1;
-        double l3 = omega * omega * omega;
-        double omega_z = 20;
-        double l1_z = 3 * omega_z - 1;
-        double l2_z = 3 * omega_z * omega_z - 1;
-        double l3_z = omega_z * omega_z * omega_z;
-        GPIObserver dob(Vector3d(l1, l1, l1_z), Vector3d(l2, l2, l2_z), Vector3d(l3, l3, l3_z));
-        PidTracker pidtracker(Vector3d(2.5, 2.5, 2.5), Vector3d(2.5, 2.5, 2.5));
-        NominalMpcc nominal_mpcc(0.309, "LD_AUGLAG", 300);
-        Matrix<double, 3 + NominalMpcc::u_dim_ + 1 + NominalMpcc::u_dim_ + 1, 1> cost_w;
-        cost_w << 0.5, 50.0     //weight of contouring error and lag error
-                , mu * total_len / (ctrl_pts.rows() * t_sample - 3 * t_sample) //weight of progress
-                , 0.0000, 0.0000, 0.005, 0.1    //weight of control input
-                , 0     //weight of the cost of violating distance constraints
-                , 0.2, 0.2, 0.2, 200.0  //weight of the difference of control input
-                , 75;   //weight of the cost of violating CBF constraints
-        nominal_mpcc.set_w(cost_w);
-        Matrix<double, NominalMpcc::x_dim_, 1> state;
-        Matrix<double, n_step, NominalMpcc::u_dim_> u;
-        Matrix<double, n_step, NominalMpcc::x_dim_> x_predict;
-        Matrix<double, n_step + 1, 1> t_index;
-        t_index[0] = t_sample * 3;
-        for (int k = 0; k < n_step; k++) {
-            t_index[k + 1] = t_index[k] + 0.05;
-        }
-        for (int k = 0; k < n_step; k++) {
-            u.row(k) << 0., 0., 0., 0.309;
-        }
-        vector<double> solve_times;
-        vector<double> vel_norm, sim_vel_norm, acc_list, sim_acc_list, t_list, r_list, p_list, y_list, tilt_list, rr_list, pr_list, yr_list, thr_list;
-        vector<double> acc_x_list, acc_y_list, acc_z_list, sim_acc_x_list, sim_acc_y_list, sim_acc_z_list;
-        vector<double> real_rr_list, real_pr_list, real_yr_list;
-        vector<double> acc_x_err_list, acc_y_err_list, acc_z_err_list, vel_x_list, vel_y_list, vel_z_list;
-        vector<double> sim_vel_x_list, sim_vel_y_list, sim_vel_z_list;
-        vector<double> dob_vx_list, dob_vy_list, dob_vz_list, dob_dx_list, dob_dy_list, dob_dz_list;
-        vector<double> nominal_acc_x_err_list, nominal_acc_y_err_list, nominal_acc_z_err_list;
-        vector<Vector3d> collision_pos;
-        double mean_acc_norm_err = 0.0, mean_nominal_acc_norm_err = 0.0;
-        double mean_v_norm_err = 0.0, mean_nominal_v_norm_err = 0.0;
-        double mean_p_err = 0.0, mean_nominal_p_err = 0.0;
-        vector<Vector3d> mpcc_traj;
-        vector<double> dis_to_obs, dis_to_obs_sim, dis_to_obs_sim2;
-        int reach_cnt = 1 / 0.02;
+    double omega = 14;
+    double l1 = 3 * omega - 1;
+    double l2 = 3 * omega * omega - 1;
+    double l3 = omega * omega * omega;
+    double omega_z = 20;
+    double l1_z = 3 * omega_z - 1;
+    double l2_z = 3 * omega_z * omega_z - 1;
+    double l3_z = omega_z * omega_z * omega_z;
+    GPIObserver dob(Vector3d(l1, l1, l1_z), Vector3d(l2, l2, l2_z), Vector3d(l3, l3, l3_z));
+    PidTracker pidtracker(Vector3d(2.5, 2.5, 2.5), Vector3d(2.5, 2.5, 2.5));
+    NominalMpcc nominal_mpcc(0.309, "LD_AUGLAG", 300);
+    Matrix<double, 3 + NominalMpcc::u_dim_ + 1 + NominalMpcc::u_dim_ + 1, 1> cost_w;
+    cost_w << 0.5, 50.0     //weight of contouring error and lag error
+            , mu * total_len / (ctrl_pts.rows() * t_sample - 3 * t_sample) //weight of progress
+            , 0.0000, 0.0000, 0.005, 0.1    //weight of control input
+            , 0     //weight of the cost of violating distance constraints
+            , 0.2, 0.2, 0.2, 200.0  //weight of the difference of control input
+            , 75;   //weight of the cost of violating CBF constraints
+    nominal_mpcc.set_w(cost_w);
+    Matrix<double, NominalMpcc::x_dim_, 1> state;
+    Matrix<double, n_step, NominalMpcc::u_dim_> u;
+    Matrix<double, n_step, NominalMpcc::x_dim_> x_predict;
+    Matrix<double, n_step + 1, 1> t_index;
+    t_index[0] = t_sample * 3;
+    for (int k = 0; k < n_step; k++) {
+        t_index[k + 1] = t_index[k] + 0.05;
+    }
+    for (int k = 0; k < n_step; k++) {
+        u.row(k) << 0., 0., 0., 0.309;
+    }
+    vector<double> solve_times;
+    vector<double> vel_norm, sim_vel_norm, acc_list, sim_acc_list, t_list, r_list, p_list, y_list, tilt_list, rr_list, pr_list, yr_list, thr_list;
+    vector<double> acc_x_list, acc_y_list, acc_z_list, sim_acc_x_list, sim_acc_y_list, sim_acc_z_list;
+    vector<double> real_rr_list, real_pr_list, real_yr_list;
+    vector<double> acc_x_err_list, acc_y_err_list, acc_z_err_list, vel_x_list, vel_y_list, vel_z_list;
+    vector<double> sim_vel_x_list, sim_vel_y_list, sim_vel_z_list;
+    vector<double> dob_vx_list, dob_vy_list, dob_vz_list, dob_dx_list, dob_dy_list, dob_dz_list;
+    vector<double> nominal_acc_x_err_list, nominal_acc_y_err_list, nominal_acc_z_err_list;
+    vector<Vector3d> collision_pos;
+    double mean_acc_norm_err = 0.0, mean_nominal_acc_norm_err = 0.0;
+    double mean_v_norm_err = 0.0, mean_nominal_v_norm_err = 0.0;
+    double mean_p_err = 0.0, mean_nominal_p_err = 0.0;
+    vector<Vector3d> mpcc_traj;
+    vector<double> dis_to_obs, dis_to_obs_sim, dis_to_obs_sim2;
+    int reach_cnt = 1 / 0.02;
 #if USE_EXTENDED_DYNAMICS
-        ExtendedQuadDynamic quaddynamic(0.309);
+    ExtendedQuadDynamic quaddynamic(0.309);
 #else
-        NominalQuadDynamic quaddynamic(0.309);
+    NominalQuadDynamic quaddynamic(0.309);
 #endif
-        Eigen::Matrix<double, NominalMpcc::x_dim_, 1> sim_xdot, sim_state1, sim_state2, nominal_sim_xdot, nominal_sim_state1;
-        sim_xdot.setZero();
-        sim_state1.setZero();
-        start_time = ros::Time::now();
-        VectorXd u_opt(4);
-        u_opt.setZero();
-        u_opt(3) = 0.309;
-        double solve_t;
-        double distur_time_total = 1.0 / 0.02;
-        double distur_time = distur_time_total;
-        Vector3d acc_r(0, 0, 0);
-        int loop_cnt = 0;
-        ros::Time past_vel_stamp = ros::Time::now();
-        while (ros::ok()) {
-            // cout << "new loop" << endl;
-            Vector3d pos = px4.pos();
-            Vector3d vel = px4.vel();
-            Vector3d acc_b = px4.acc();
-            Vector4d quat = px4.quat();
-            Vector3d ang_rate = px4.rate();
-            ros::Time vel_stamp = px4.vel_stamp();
+    Eigen::Matrix<double, NominalMpcc::x_dim_, 1> sim_xdot, sim_state1, sim_state2, nominal_sim_xdot, nominal_sim_state1;
+    sim_xdot.setZero();
+    sim_state1.setZero();
+    start_time = ros::Time::now();
+    VectorXd u_opt(4);
+    u_opt.setZero();
+    u_opt(3) = 0.309;
+    double solve_t;
+    double distur_time_total = 1.0 / 0.02;
+    double distur_time = distur_time_total;
+    Vector3d acc_r(0, 0, 0);
+    int loop_cnt = 0;
+    ros::Time past_vel_stamp = ros::Time::now();
+    while (ros::ok()) {
+        // cout << "new loop" << endl;
+        Vector3d pos = px4.pos();
+        Vector3d vel = px4.vel();
+        Vector3d acc_b = px4.acc();
+        Vector4d quat = px4.quat();
+        Vector3d ang_rate = px4.rate();
+        ros::Time vel_stamp = px4.vel_stamp();
 #if USE_EXTENDED_DYNAMICS
-            state << pos, vel, quat.w(), quat.x(), quat.y(), quat.z(), u_opt(3);
+        state << pos, vel, quat.w(), quat.x(), quat.y(), quat.z(), u_opt(3);
 #else
-            state << pos, vel, quat.w(), quat.x(), quat.y(), quat.z();
+        state << pos, vel, quat.w(), quat.x(), quat.y(), quat.z();
 #endif
 
-            // quaddynamic.xdot_func(state, u_opt, sim_xdot);
+        // quaddynamic.xdot_func(state, u_opt, sim_xdot);
 
-            Vector3d ang = quaternion_to_rpy(Quaterniond(quat.w(), quat.x(), quat.y(), quat.z()));
-            auto b_e_matrix = Quaterniond(quat.w(), quat.x(), quat.y(), quat.z()).toRotationMatrix();
-            Vector3d acc = b_e_matrix * acc_b - Vector3d(0, 0, 9.81);
+        Vector3d ang = quaternion_to_rpy(Quaterniond(quat.w(), quat.x(), quat.y(), quat.z()));
+        auto b_e_matrix = Quaterniond(quat.w(), quat.x(), quat.y(), quat.z()).toRotationMatrix();
+        Vector3d acc = b_e_matrix * acc_b - Vector3d(0, 0, 9.81);
 
-            dob.update(vel, b_e_matrix, u_opt[3] * 9.81 / 0.309/*1.084e-5 * pow(u_opt[3] * 1000 + 100, 2) * 4 / 0.74*/, (vel_stamp - past_vel_stamp).toSec());
-            // cout << vel.transpose() << " " << (vel_stamp - past_vel_stamp).toSec() << " " << dob.get_dhat().transpose() << " " << dob.get_dhat().norm() << endl;
-            dob_vx_list.push_back(dob.get_vhat().x());
-            dob_vy_list.push_back(dob.get_vhat().y());
-            dob_vz_list.push_back(dob.get_vhat().z());
-            dob_dx_list.push_back(dob.get_dhat().x());
-            dob_dy_list.push_back(dob.get_dhat().y());
-            dob_dz_list.push_back(dob.get_dhat().z());
+        dob.update(vel, b_e_matrix, u_opt[3] * 9.81 / 0.309/*1.084e-5 * pow(u_opt[3] * 1000 + 100, 2) * 4 / 0.74*/, (vel_stamp - past_vel_stamp).toSec());
+        // cout << vel.transpose() << " " << (vel_stamp - past_vel_stamp).toSec() << " " << dob.get_dhat().transpose() << " " << dob.get_dhat().norm() << endl;
+        dob_vx_list.push_back(dob.get_vhat().x());
+        dob_vy_list.push_back(dob.get_vhat().y());
+        dob_vz_list.push_back(dob.get_vhat().z());
+        dob_dx_list.push_back(dob.get_dhat().x());
+        dob_dy_list.push_back(dob.get_dhat().y());
+        dob_dz_list.push_back(dob.get_dhat().z());
 
-            dis_to_obs.push_back(min(sdfmap.get_dist_with_grad_trilinear(pos).first, get_dis_to_dynobs(dynobs, pos)));
-            dis_to_obs_sim.push_back(sdfmap.get_dist_with_grad_trilinear(Vector3d(sim_state1.block(0, 0, 3, 1))).first);
-            dis_to_obs_sim2.push_back(sdfmap.get_dist_with_grad_trilinear(Vector3d(sim_state2.block(0, 0, 3, 1))).first);
-            if (sdfmap.get_dist_with_grad_trilinear(pos).first < 0.3) {
-                collision_pos.push_back(pos);
+        dis_to_obs.push_back(min(sdfmap.get_dist_with_grad_trilinear(pos).first, get_dis_to_dynobs(dynobs, pos)));
+        dis_to_obs_sim.push_back(sdfmap.get_dist_with_grad_trilinear(Vector3d(sim_state1.block(0, 0, 3, 1))).first);
+        dis_to_obs_sim2.push_back(sdfmap.get_dist_with_grad_trilinear(Vector3d(sim_state2.block(0, 0, 3, 1))).first);
+        if (sdfmap.get_dist_with_grad_trilinear(pos).first < 0.3) {
+            collision_pos.push_back(pos);
+        }
+
+        mpcc_traj.push_back(pos);
+        vel_norm.push_back(vel.norm());
+        sim_vel_norm.push_back(sim_state1.block(3, 0, 3, 1).norm());
+        mean_v_norm_err += fabs((vel - sim_state1.block(3, 0, 3, 1)).norm());
+        mean_nominal_v_norm_err += fabs((vel - nominal_sim_state1.block(3, 0, 3, 1)).norm());
+        mean_p_err += fabs((pos - sim_state1.block(0, 0, 3, 1)).norm());
+        mean_nominal_p_err += fabs((pos - nominal_sim_state1.block(0, 0, 3, 1)).norm());
+        // cout << (pos - sim_state1.block(0, 0, 3, 1)).norm() << " " << (pos - nominal_sim_state1.block(0, 0, 3, 1)).norm() << endl;
+        acc_list.push_back(acc.norm());
+        acc_x_list.push_back(acc.x());
+        acc_y_list.push_back(acc.y());
+        acc_z_list.push_back(acc.z());
+        Vector3d sim_acc = sim_xdot.block(3, 0, 3, 1);
+        Vector3d nominal_sim_acc = nominal_sim_xdot.block(3, 0, 3, 1);
+        sim_acc_list.push_back(sim_acc.norm());
+        sim_acc_x_list.push_back(sim_acc.x());
+        sim_acc_y_list.push_back(sim_acc.y());
+        sim_acc_z_list.push_back(sim_acc.z());
+        mean_acc_norm_err += fabs((acc - sim_acc).norm());
+        mean_nominal_acc_norm_err += fabs((acc - nominal_sim_acc).norm());
+        acc_x_err_list.push_back((acc - sim_acc).x());
+        acc_y_err_list.push_back((acc - sim_acc).y());
+        acc_z_err_list.push_back((acc - sim_acc).z());
+        nominal_acc_x_err_list.push_back((acc - nominal_sim_acc).x());
+        nominal_acc_y_err_list.push_back((acc - nominal_sim_acc).y());
+        nominal_acc_z_err_list.push_back((acc - nominal_sim_acc).z());
+        vel_x_list.push_back(vel.x());
+        vel_y_list.push_back(vel.y());
+        vel_z_list.push_back(vel.z());
+        t_list.push_back((ros::Time::now() - start_time).toSec());
+        r_list.push_back(ang.x() * 180.0 / M_PI);
+        p_list.push_back(ang.y() * 180.0 / M_PI);
+        y_list.push_back(ang.z() * 180.0 / M_PI);
+        tilt_list.push_back(acos(cos(ang.x())*cos(ang.y())) * 180.0 / M_PI);
+        rr_list.push_back(u_opt(0) * 180.0 / M_PI);
+        pr_list.push_back(u_opt(1) * 180.0 / M_PI);
+        yr_list.push_back(u_opt(2) * 180.0 / M_PI);
+        thr_list.push_back(u_opt(3));
+        real_rr_list.push_back(ang_rate(0) * 180.0 / M_PI);
+        real_pr_list.push_back(ang_rate(1) * 180.0 / M_PI);
+        real_yr_list.push_back(ang_rate(2) * 180.0 / M_PI);
+
+        logger.pos_ = pos;
+        logger.vel_ = vel;
+        logger.acc_ = acc;
+        logger.att_ = ang;
+        logger.rate_ = ang_rate;
+        logger.tilt_ = acos(cos(ang.x())*cos(ang.y())) * 180.0 / M_PI;
+        logger.disturbance_ = dob.get_dhat();
+        logger.u_ = u_opt;
+        logger.dis_to_obs_ = min(sdfmap.get_dist_with_grad_trilinear(pos).first, get_dis_to_dynobs(dynobs, pos));
+        logger.solution_time_ = solve_t;
+        logger.time_ = (ros::Time::now() - start_time).toSec();
+
+        if (online_replan) {
+            auto time_ = chrono::steady_clock::now();
+            //global planner
+            kino_astar.set_param(
+                10., //w_time 2.5
+                MAX_VEL,  //max_vel
+                MAX_ACC,  //max_acc
+                1.0 + 1.0 / 10000, //tie_breaker
+                1 / 2.0,  //acc_resolution
+                1 / 1.0,      //time_resolution
+                0.6,      //max_duration
+                1 / 50.,   //safety_check_res
+                5.0);     //lamda_heu
+            Vector3d vel_limed;
+            vel_limed = vel / (vel - Vector3d(MAX_VEL, MAX_VEL, MAX_VEL)).cwiseAbs().maxCoeff() * MAX_VEL;
+            kino_astar.search(
+                pos,
+                vel_limed,
+                goal_pos,
+                Vector3d(0., 0., 0.),
+                &dynobs);
+            t_sample = 0.2;
+            auto kino_path = kino_astar.get_sample_path(t_sample);
+            kino_path.first.push_back(goal_pos);
+            ros_inte.publish_kino_traj(kino_path.first);
+
+            //trajectory parameterization
+            vector<Vector3d> vels, accs;
+            vels.push_back(Vector3d::Zero());
+            vels.push_back(Vector3d::Zero());
+            accs.push_back(Vector3d::Zero());
+            accs.push_back(Vector3d::Zero());
+            UniformBspline::parameter2Bspline(t_sample, kino_path.first, vels, accs, ctrl_pts);
+
+            //B-spline trajectory optimization
+            BsplineOptimizer optimizer;
+            vector<tuple<double, double, double, double, double, double>> cost_history;
+            if (ctrl_pts.size() <= 12) {
+                break;
             }
+            MatrixXd new_ctrl_pts;
+            Vector3d tmp_goal = goal_pos;
+            if (ctrl_pts.rows() > 10) {
+                new_ctrl_pts = ctrl_pts.block(0, 0, 10, ctrl_pts.cols());
+                ctrl_pts = new_ctrl_pts;
+                tmp_goal = UniformBspline::getBsplineValue(t_sample, ctrl_pts, ctrl_pts.rows() * t_sample - 1e-3, 3);
+            }
+            optimizer.optimize(ctrl_pts, pos,
+                vel, acc_r, tmp_goal,
+                Vector3d(0, 0, 0), Vector3d(0, 0, 0), &sdfmap, t_sample,
+                100.0,  //lambda_s
+                5000.0,   //lambda_c
+                10.,    //lambda_v
+                0.1,    //lambda_a
+                0.0,    //lambda_l
+                0.0,      //lambda_dl 0.1
+                10000,   //lambda_ep
+                100,   //lambda_ev 100
+                0,   //lambda_ea 10
+                0.4,   //risk_dis
+                MAX_VEL,    //vel_max
+                MAX_ACC,    //acc_max
+                cost_history,
+                &dynobs);
+            v_ctrl_pts = UniformBspline::getDerivativeCtrlPts(ctrl_pts, t_sample);
+            a_ctrl_pts = UniformBspline::getDerivativeCtrlPts(v_ctrl_pts, t_sample);
+            vector<Vector3d> opt_bsp_p, opt_bsp_v, opt_bsp_a;
+            vector<double> opt_t_list;
+            for (double t = 3 * t_sample; t < ctrl_pts.rows() * t_sample + 1e-6; t += t_sample * 1) {
+                auto p = UniformBspline::getBsplineValue(t_sample, ctrl_pts, t, 3);
+                auto v = UniformBspline::getBsplineValue(t_sample, v_ctrl_pts, t - t_sample, 2);
+                auto a = UniformBspline::getBsplineValue(t_sample, a_ctrl_pts, t - t_sample - t_sample, 1);
+                opt_bsp_p.push_back(p);
+                opt_bsp_v.push_back(v);
+                opt_bsp_a.push_back(a);
+                opt_t_list.push_back(t);
+            }
+            ros_inte.publish_bspline_traj(opt_bsp_p);
+            double spend = chrono::duration<double>(chrono::steady_clock::now() - time_).count();
+            // cout << "spend: " << spend * 1e3 << " ms" << endl;
+            solve_times.push_back(spend);
+        }
 
-            mpcc_traj.push_back(pos);
-            vel_norm.push_back(vel.norm());
-            sim_vel_norm.push_back(sim_state1.block(3, 0, 3, 1).norm());
-            mean_v_norm_err += fabs((vel - sim_state1.block(3, 0, 3, 1)).norm());
-            mean_nominal_v_norm_err += fabs((vel - nominal_sim_state1.block(3, 0, 3, 1)).norm());
-            mean_p_err += fabs((pos - sim_state1.block(0, 0, 3, 1)).norm());
-            mean_nominal_p_err += fabs((pos - nominal_sim_state1.block(0, 0, 3, 1)).norm());
-            // cout << (pos - sim_state1.block(0, 0, 3, 1)).norm() << " " << (pos - nominal_sim_state1.block(0, 0, 3, 1)).norm() << endl;
-            acc_list.push_back(acc.norm());
-            acc_x_list.push_back(acc.x());
-            acc_y_list.push_back(acc.y());
-            acc_z_list.push_back(acc.z());
-            Vector3d sim_acc = sim_xdot.block(3, 0, 3, 1);
-            Vector3d nominal_sim_acc = nominal_sim_xdot.block(3, 0, 3, 1);
-            sim_acc_list.push_back(sim_acc.norm());
-            sim_acc_x_list.push_back(sim_acc.x());
-            sim_acc_y_list.push_back(sim_acc.y());
-            sim_acc_z_list.push_back(sim_acc.z());
-            mean_acc_norm_err += fabs((acc - sim_acc).norm());
-            mean_nominal_acc_norm_err += fabs((acc - nominal_sim_acc).norm());
-            acc_x_err_list.push_back((acc - sim_acc).x());
-            acc_y_err_list.push_back((acc - sim_acc).y());
-            acc_z_err_list.push_back((acc - sim_acc).z());
-            nominal_acc_x_err_list.push_back((acc - nominal_sim_acc).x());
-            nominal_acc_y_err_list.push_back((acc - nominal_sim_acc).y());
-            nominal_acc_z_err_list.push_back((acc - nominal_sim_acc).z());
-            vel_x_list.push_back(vel.x());
-            vel_y_list.push_back(vel.y());
-            vel_z_list.push_back(vel.z());
-            t_list.push_back((ros::Time::now() - start_time).toSec());
-            r_list.push_back(ang.x() * 180.0 / M_PI);
-            p_list.push_back(ang.y() * 180.0 / M_PI);
-            y_list.push_back(ang.z() * 180.0 / M_PI);
-            tilt_list.push_back(acos(cos(ang.x())*cos(ang.y())) * 180.0 / M_PI);
-            rr_list.push_back(u_opt(0) * 180.0 / M_PI);
-            pr_list.push_back(u_opt(1) * 180.0 / M_PI);
-            yr_list.push_back(u_opt(2) * 180.0 / M_PI);
-            thr_list.push_back(u_opt(3));
-            real_rr_list.push_back(ang_rate(0) * 180.0 / M_PI);
-            real_pr_list.push_back(ang_rate(1) * 180.0 / M_PI);
-            real_yr_list.push_back(ang_rate(2) * 180.0 / M_PI);
+        if (enable_mpcc) {
+            //MPCC
+            auto ret = nominal_mpcc.solve(state,
+                sdfmap2, ctrl_pts,
+                v_ctrl_pts, a_ctrl_pts,
+                t_sample,
+                total_len,
+                u_opt,
+                (enable_dob && dob.get_dhat().norm() < 15) ? dob.get_dhat() : Vector3d(0., 0., 0.),
+                dynobs,
+                u, x_predict,
+                t_index, solve_t);
 
-            logger.pos_ = pos;
-            logger.vel_ = vel;
-            logger.acc_ = acc;
-            logger.att_ = ang;
-            logger.rate_ = ang_rate;
-            logger.tilt_ = acos(cos(ang.x())*cos(ang.y())) * 180.0 / M_PI;
-            logger.disturbance_ = dob.get_dhat();
-            logger.u_ = u_opt;
-            logger.dis_to_obs_ = min(sdfmap.get_dist_with_grad_trilinear(pos).first, get_dis_to_dynobs(dynobs, pos));
-            logger.solution_time_ = solve_t;
-            logger.time_ = (ros::Time::now() - start_time).toSec();
+            vector<Vector3d> predict_traj;
+            predict_traj.push_back(pos);
+            for (int i = 0; i < n_step; i++) {
+                predict_traj.push_back(x_predict.block(i, 0, 1, 3).transpose());
+            }
+            ros_inte.publish_predict_traj(predict_traj);
 
+            // cout << t_index.transpose() << endl;
+            // cout << ctrl_pts.rows() * t_sample << endl;
+
+            // cout << "u:" << endl << u << endl;
+            // cout << "x_predict:" << endl << x_predict << endl;
+            u_opt = u.row(0);
+#if USE_EXTENDED_DYNAMICS
+            u_opt(3) = x_predict(0, 10);
+#endif
+            solve_times.push_back(solve_t);
+
+            px4.set_rate_with_trust(u_opt(0), u_opt(1), u_opt(2), u_opt(3));
+        } else {
+            solve_times.push_back(0);
+            double t = loop_cnt * 0.02;
             if (online_replan) {
-                auto time_ = chrono::steady_clock::now();
-                //global planner
-                kino_astar.set_param(
-                    10., //w_time 2.5
-                    MAX_VEL,  //max_vel
-                    MAX_ACC,  //max_acc
-                    1.0 + 1.0 / 10000, //tie_breaker
-                    1 / 2.0,  //acc_resolution
-                    1 / 1.0,      //time_resolution
-                    0.6,      //max_duration
-                    1 / 50.,   //safety_check_res
-                    5.0);     //lamda_heu
-                Vector3d vel_limed;
-                vel_limed = vel / (vel - Vector3d(MAX_VEL, MAX_VEL, MAX_VEL)).cwiseAbs().maxCoeff() * MAX_VEL;
-                kino_astar.search(
-                    pos,
-                    vel_limed,
-                    goal_pos,
-                    Vector3d(0., 0., 0.),
-                    &dynobs);
-                t_sample = 0.2;
-                auto kino_path = kino_astar.get_sample_path(t_sample);
-                kino_path.first.push_back(goal_pos);
-                ros_inte.publish_kino_traj(kino_path.first);
-                
-                //trajectory parameterization
-                vector<Vector3d> vels, accs;
-                vels.push_back(Vector3d::Zero());
-                vels.push_back(Vector3d::Zero());
-                accs.push_back(Vector3d::Zero());
-                accs.push_back(Vector3d::Zero());
-                UniformBspline::parameter2Bspline(t_sample, kino_path.first, vels, accs, ctrl_pts);
-
-                //B-spline trajectory optimization
-                BsplineOptimizer optimizer;
-                vector<tuple<double, double, double, double, double, double>> cost_history;
-                if (ctrl_pts.size() <= 12) {
-                    break;
-                }
-                MatrixXd new_ctrl_pts;
-                Vector3d tmp_goal = goal_pos;
-                if (ctrl_pts.rows() > 10) {
-                    new_ctrl_pts = ctrl_pts.block(0, 0, 10, ctrl_pts.cols());
-                    ctrl_pts = new_ctrl_pts;
-                    tmp_goal = UniformBspline::getBsplineValue(t_sample, ctrl_pts, ctrl_pts.rows() * t_sample - 1e-3, 3);
-                }
-                optimizer.optimize(ctrl_pts, pos,
-                    vel, acc_r, tmp_goal,
-                    Vector3d(0, 0, 0), Vector3d(0, 0, 0), &sdfmap, t_sample, 
-                    100.0,  //lambda_s
-                    5000.0,   //lambda_c
-                    10.,    //lambda_v
-                    0.1,    //lambda_a
-                    0.0,    //lambda_l
-                    0.0,      //lambda_dl 0.1
-                    10000,   //lambda_ep
-                    100,   //lambda_ev 100
-                    0,   //lambda_ea 10
-                    0.4,   //risk_dis
-                    MAX_VEL,    //vel_max
-                    MAX_ACC,    //acc_max 
-                    cost_history,
-                    &dynobs);
-                v_ctrl_pts = UniformBspline::getDerivativeCtrlPts(ctrl_pts, t_sample);
-                a_ctrl_pts = UniformBspline::getDerivativeCtrlPts(v_ctrl_pts, t_sample);
-                vector<Vector3d> opt_bsp_p, opt_bsp_v, opt_bsp_a;
-                vector<double> opt_t_list;
-                for (double t = 3 * t_sample; t < ctrl_pts.rows() * t_sample + 1e-6; t += t_sample * 1) {
-                    auto p = UniformBspline::getBsplineValue(t_sample, ctrl_pts, t, 3);
-                    auto v = UniformBspline::getBsplineValue(t_sample, v_ctrl_pts, t - t_sample, 2);
-                    auto a = UniformBspline::getBsplineValue(t_sample, a_ctrl_pts, t - t_sample - t_sample, 1);
-                    opt_bsp_p.push_back(p);
-                    opt_bsp_v.push_back(v);
-                    opt_bsp_a.push_back(a);
-                    opt_t_list.push_back(t);
-                }
-                ros_inte.publish_bspline_traj(opt_bsp_p);
-                double spend = chrono::duration<double>(chrono::steady_clock::now() - time_).count();
-                // cout << "spend: " << spend * 1e3 << " ms" << endl;
-                solve_times.push_back(spend);
+                t = 0.02;
             }
-
-            if (enable_mpcc) {
-                //MPCC
-                auto ret = nominal_mpcc.solve(state,
-                    sdfmap2, ctrl_pts,
-                    v_ctrl_pts, a_ctrl_pts,
-                    t_sample,
-                    total_len,
-                    u_opt,
-                    (enable_dob && dob.get_dhat().norm() < 15) ? dob.get_dhat() : Vector3d(0., 0., 0.),
-                    dynobs,
-                    u, x_predict,
-                    t_index, solve_t);
-                
-                vector<Vector3d> predict_traj;
-                predict_traj.push_back(pos);
-                for (int i = 0; i < n_step; i++) {
-                    predict_traj.push_back(x_predict.block(i, 0, 1, 3).transpose());
-                }
-                ros_inte.publish_predict_traj(predict_traj);
-
-                // cout << t_index.transpose() << endl;
-                // cout << ctrl_pts.rows() * t_sample << endl;
-                
-                // cout << "u:" << endl << u << endl;
-                // cout << "x_predict:" << endl << x_predict << endl;
-                u_opt = u.row(0);
-#if USE_EXTENDED_DYNAMICS
-                u_opt(3) = x_predict(0, 10);
-#endif
-                solve_times.push_back(solve_t);
-
-                px4.set_rate_with_trust(u_opt(0), u_opt(1), u_opt(2), u_opt(3));
-            } else {
-                solve_times.push_back(0);
-                double t = loop_cnt * 0.02;
-                if (online_replan) {
-                    t = 0.02;
-                }
-                if (t > t_sample * (ctrl_pts.rows() - 3)) {
-                    t = t_sample * (ctrl_pts.rows() - 3);
-                    if (reach_cnt-- < 0)
-                        break;
-                }
-                Vector3d pd = UniformBspline::getBsplineValueFast<Vector3d>(t_sample, ctrl_pts, t + t_sample * 3, 3);
-                Vector3d vd = UniformBspline::getBsplineValueFast<Vector3d>(t_sample, v_ctrl_pts, t + t_sample * 2, 2);
-                Vector3d ad = UniformBspline::getBsplineValueFast<Vector3d>(t_sample, a_ctrl_pts, t + t_sample * 1, 1);
-                acc_r = ad;
-                auto ret = pidtracker.calculate_control(
-                    pd, vd, ad, pos, vel, Quaterniond(quat.w(), quat.x(), quat.y(), quat.z())
-                );
-                px4.set_attitude_with_trust(ret.first, ret.second);
-                pidtracker.estimateThrustModel(acc);
-            }
-
-            // break;
-            
-            quaddynamic.xdot_func(state, u_opt, dob.get_dhat(), sim_xdot);
-            quaddynamic.rk4_func(state, u_opt, dob.get_dhat(), 0.02, sim_state1);
-            quaddynamic.rk4_func(state, u_opt, dob.get_dhat(), 0.1, sim_state2);
-
-            quaddynamic.xdot_func(state, u_opt, Vector3d(0, 0, 0), nominal_sim_xdot);
-            quaddynamic.rk4_func(state, u_opt, Vector3d(0, 0, 0), 0.02, nominal_sim_state1);
-
-            ros_inte.publish_quadmesh(pos, quat);
-            ros_inte.publish_mpcc_traj(mpcc_traj);
-            ros_inte.publish_pose(pos, quat);
-            // ros_inte.publish_collision(collision_pos);
-
-            for (auto &o : dynobs) {
-                o.update((vel_stamp - past_vel_stamp).toSec());
-                // o.update(0.02);
-            }
-            ros_inte.publish_dyn_obs(dynobs);
-
-            logger.update();
-
-            if (pos.x() > 30.0 && distur_time > 0) {//(pos.x() > 30.0 && distur_time > 0) {
-                distur_set[0] = 0.0;//min(1.0, distur_set[0] + 0.2);
-                distur_set[1] = 0.0;//min(1.0, distur_set[1] + 0.2);
-                distur_set[2] = 0.0;
-                distur_time--;
-            } else {
-                distur_set[0] = 0.0;//max(0.0, distur_set[0] - 0.2);
-                distur_set[1] = 0.0;//max(0.0, distur_set[1] - 0.2);
-                distur_set[2] = 0.0;
-            }
-
-            // rate.sleep();
-            past_vel_stamp = vel_stamp;
-            ros::spinOnce();
-
-            loop_cnt++;
-
-            if (t_index[0] - ctrl_pts.rows() * t_sample > -1e-1) {
+            if (t > t_sample * (ctrl_pts.rows() - 3)) {
+                t = t_sample * (ctrl_pts.rows() - 3);
                 if (reach_cnt-- < 0)
                     break;
             }
-            for (int i = 1; i < t_index.size(); i++)
-                t_index[i] += 0.02;
-            // break;
+            Vector3d pd = UniformBspline::getBsplineValueFast<Vector3d>(t_sample, ctrl_pts, t + t_sample * 3, 3);
+            Vector3d vd = UniformBspline::getBsplineValueFast<Vector3d>(t_sample, v_ctrl_pts, t + t_sample * 2, 2);
+            Vector3d ad = UniformBspline::getBsplineValueFast<Vector3d>(t_sample, a_ctrl_pts, t + t_sample * 1, 1);
+            acc_r = ad;
+            auto ret = pidtracker.calculate_control(
+                pd, vd, ad, pos, vel, Quaterniond(quat.w(), quat.x(), quat.y(), quat.z())
+            );
+            px4.set_attitude_with_trust(ret.first, ret.second);
+            pidtracker.estimateThrustModel(acc);
         }
-        
-        mean_acc_norm_err /= loop_cnt;
-        mean_nominal_acc_norm_err /= loop_cnt;
-        mean_v_norm_err /= loop_cnt;
-        mean_nominal_v_norm_err /= loop_cnt;
-        mean_p_err /= loop_cnt;
-        mean_nominal_p_err /= loop_cnt;
 
-        if (*min_element(dis_to_obs.begin(), dis_to_obs.end()) < 0.2) {
-            fail_cnt++;
+        // break;
+
+        quaddynamic.xdot_func(state, u_opt, dob.get_dhat(), sim_xdot);
+        quaddynamic.rk4_func(state, u_opt, dob.get_dhat(), 0.02, sim_state1);
+        quaddynamic.rk4_func(state, u_opt, dob.get_dhat(), 0.1, sim_state2);
+
+        quaddynamic.xdot_func(state, u_opt, Vector3d(0, 0, 0), nominal_sim_xdot);
+        quaddynamic.rk4_func(state, u_opt, Vector3d(0, 0, 0), 0.02, nominal_sim_state1);
+
+        ros_inte.publish_quadmesh(pos, quat);
+        ros_inte.publish_mpcc_traj(mpcc_traj);
+        // ros_inte.publish_collision(collision_pos);
+
+        for (auto &o : dynobs) {
+            o.update((vel_stamp - past_vel_stamp).toSec());
+            // o.update(0.02);
+        }
+        ros_inte.publish_dyn_obs(dynobs);
+
+        logger.update();
+
+        if (pos.x() > 30.0 && distur_time > 0) {//(pos.x() > 30.0 && distur_time > 0) {
+            distur_set[0] = 0.0;//min(1.0, distur_set[0] + 0.2);
+            distur_set[1] = 0.0;//min(1.0, distur_set[1] + 0.2);
+            distur_set[2] = 0.0;
+            distur_time--;
         } else {
-            avg_avg_vel += accumulate(vel_norm.begin(), vel_norm.end(), 0.0) / vel_norm.size();
-            avg_max_vel += *max_element(vel_norm.begin(), vel_norm.end());
-            avg_min_dist += *min_element(dis_to_obs.begin(), dis_to_obs.end()) > 0 ? *min_element(dis_to_obs.begin(), dis_to_obs.end()) : 0;
+            distur_set[0] = 0.0;//max(0.0, distur_set[0] - 0.2);
+            distur_set[1] = 0.0;//max(0.0, distur_set[1] - 0.2);
+            distur_set[2] = 0.0;
         }
 
-        // cout << "Mean solution time: " << fixed << setprecision(3)
-        //     << accumulate(solve_times.begin(), solve_times.end(), 0.0) / solve_times.size() * 1e3
-        //     << " ms" << endl;
-        // cout << "mean_acc_norm_err: " << mean_acc_norm_err << " m/s^2" << endl;
-        // cout << "mean_nominal_acc_norm_err: " << mean_nominal_acc_norm_err << " m/s^2" << endl;
-        // cout << "mean_v_norm_err: " << mean_v_norm_err << " m/s" << endl;
-        // cout << "mean_nominal_v_norm_err: " << mean_nominal_v_norm_err << " m/s" << endl;
-        // cout << fixed << setprecision(6) << "mean_p_err: " << mean_p_err << " m" << endl;
-        // cout << fixed << setprecision(6) << "mean_nominal_p_err: " << mean_nominal_p_err << " m" << endl;
+        // rate.sleep();
+        past_vel_stamp = vel_stamp;
+        ros::spinOnce();
 
-        // cout << "mean velocity related to reference traj: " << total_len / t_list[t_list.size() - 1] << " m/s" << endl;
-        // cout << "mean velocity related to real traj: " << accumulate(vel_norm.begin(), vel_norm.end(), 0.0) / vel_norm.size() << " m/s" << endl;
-        // cout << "minimum distance to nearest obstacle: " << *min_element(dis_to_obs.begin(), dis_to_obs.end()) << " m" << endl;
+        loop_cnt++;
 
-        start_time = ros::Time::now();
-        while((ros::Time::now() - start_time).toSec() < 8.0 && ros::ok()) {
-            Vector3d pos = px4.pos();
-            Vector3d vel = px4.vel();
-            Vector4d quat = px4.quat();
-            ros_inte.publish_pose(pos, quat);
-            ros_inte.publish_quadmesh(pos, quat);
-            auto p = UniformBspline::getBsplineValue(t_sample, ctrl_pts, 3 * t_sample + 1e-6, 3);
-            px4.set_pos(p[0], p[1], p[2], 1.57);
-            rate.sleep();
-            ros_inte.publish_fanmesh(Vector3d(8.6, 4.0, 1.0), Vector3d(0, fan_ang, M_PI / 180.0 * 90.));
-            fan_ang += M_PI / 180.0 * 10;
-            ros::spinOnce();
+        if (t_index[0] - ctrl_pts.rows() * t_sample > -1e-1) {
+            if (reach_cnt-- < 0)
+                break;
         }
-
-#if TEST
-        cout << "test num: " << i << " fail_cnt: " << fail_cnt << endl;
+        for (int i = 1; i < t_index.size(); i++)
+            t_index[i] += 0.02;
+        // break;
     }
-#endif
+
+    mean_acc_norm_err /= loop_cnt;
+    mean_nominal_acc_norm_err /= loop_cnt;
+    mean_v_norm_err /= loop_cnt;
+    mean_nominal_v_norm_err /= loop_cnt;
+    mean_p_err /= loop_cnt;
+    mean_nominal_p_err /= loop_cnt;
+
+    // cout << "Mean solution time: " << fixed << setprecision(3)
+    //     << accumulate(solve_times.begin(), solve_times.end(), 0.0) / solve_times.size() * 1e3
+    //     << " ms" << endl;
+    // cout << "mean_acc_norm_err: " << mean_acc_norm_err << " m/s^2" << endl;
+    // cout << "mean_nominal_acc_norm_err: " << mean_nominal_acc_norm_err << " m/s^2" << endl;
+    // cout << "mean_v_norm_err: " << mean_v_norm_err << " m/s" << endl;
+    // cout << "mean_nominal_v_norm_err: " << mean_nominal_v_norm_err << " m/s" << endl;
+    // cout << fixed << setprecision(6) << "mean_p_err: " << mean_p_err << " m" << endl;
+    // cout << fixed << setprecision(6) << "mean_nominal_p_err: " << mean_nominal_p_err << " m" << endl;
+
+    // cout << "mean velocity related to reference traj: " << total_len / t_list[t_list.size() - 1] << " m/s" << endl;
+    // cout << "mean velocity related to real traj: " << accumulate(vel_norm.begin(), vel_norm.end(), 0.0) / vel_norm.size() << " m/s" << endl;
+    // cout << "minimum distance to nearest obstacle: " << *min_element(dis_to_obs.begin(), dis_to_obs.end()) << " m" << endl;
+
+    start_time = ros::Time::now();
+    while((ros::Time::now() - start_time).toSec() < 8.0 && ros::ok()) {
+        Vector3d pos = px4.pos();
+        Vector3d vel = px4.vel();
+        Vector4d quat = px4.quat();
+        ros_inte.publish_quadmesh(pos, quat);
+        auto p = UniformBspline::getBsplineValue(t_sample, ctrl_pts, 3 * t_sample + 1e-6, 3);
+        px4.set_pos(p[0], p[1], p[2], 1.57);
+        rate.sleep();
+        fan_ang += M_PI / 180.0 * 10;
+        ros::spinOnce();
+    }
 
     px4.set_px4_mode("POSCTL");
 
-    cout << "avg_avg_vel: " << avg_avg_vel / (test_num - fail_cnt) << endl;
-    cout << "avg_max_vel: " << avg_max_vel / (test_num - fail_cnt) << endl;
-    cout << "avg_min_dist: " << avg_min_dist / (test_num - fail_cnt) << endl;
-    cout << "success rate: " << 1 - (double)fail_cnt / test_num << endl;
-    
-#if !TEST
     ros_inte.publish_mpcc_traj(mpcc_traj);
     
     plt::figure(3);
@@ -779,7 +743,6 @@ int main(int argc, char **argv) {
     plt::legend();
 
     plt::show();
-#endif
 
     return 0;
 }

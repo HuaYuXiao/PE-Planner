@@ -35,6 +35,11 @@ GPIO --> [disturbance_observer](https://github.com/USTC-AIS-Lab/PE-Planner/tree/
 
 ## Release Note
 
+- v1.1.1: 
+  - remove `publish_pose`, `publish_fanmesh`
+  - remove `test_num`, `TEST`
+  - remove `avg_avg_vel`, `avg_max_vel`, `avg_min_dist`
+  - remove `map_generator`
 - v1.1.0: Get parameters from the ROS parameter server
 
 

@@ -51,12 +51,3 @@ add_executable(map_viewer
 target_link_libraries(map_viewer
     ${catkin_LIBRARIES}
 )
-
-add_executable(map_generator
-    src/map_generator.cpp
-    modules/map/map.cpp
-    modules/ros_interface/ros_interface.cpp
-)
-target_link_libraries(map_generator
-    ${catkin_LIBRARIES}
-)
