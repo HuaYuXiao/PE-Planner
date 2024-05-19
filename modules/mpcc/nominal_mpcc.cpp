@@ -556,18 +556,19 @@ void NominalMpcc::set_w(Matrix<double, 3 + u_dim_ + 1 + u_dim_ + 1, 1> &w) {
 }
 
 int NominalMpcc::solve(const Matrix<double, x_dim_, 1> &state,
-    const SdfMap &sdf,
-    const MatrixXd &ctrl_pts,
-    const MatrixXd &v_ctrl_pts,
-    const MatrixXd &a_ctrl_pts,
-    const double ts,
-    const double len,
-    const Matrix<double, u_dim_, 1> last_u,
-    const Vector3d disturbance_acc,
-    Matrix<double, _n_step, u_dim_> &u, 
-    Matrix<double, _n_step, x_dim_> &x_predict,
-    Matrix<double, _n_step + 1, 1> &t_index,
-    double &solve_time) {
+                       const SdfMap &sdf,
+                       const MatrixXd &ctrl_pts,
+                       const MatrixXd &v_ctrl_pts,
+                       const MatrixXd &a_ctrl_pts,
+                       const double ts,
+                       const double len,
+                       const Matrix<double, u_dim_, 1> last_u,
+                       const Vector3d disturbance_acc,
+                       const vector<DynObs> &dynobs,
+                       Matrix<double, _n_step, u_dim_> &u,
+                       Matrix<double, _n_step, x_dim_> &x_predict,
+                       Matrix<double, _n_step + 1, 1> &t_index,
+                       double &solve_time) {
     const double t_min = ts * 3;
     const double t_max = ctrl_pts.rows() * ts;
     vector<double> uv(u_dim_ * _n_step + _n_step + 1);
@@ -607,7 +608,7 @@ int NominalMpcc::solve(const Matrix<double, x_dim_, 1> &state,
         lb[_n_step * u_dim_ + k] = 0.002 * 0.1 * (t_max - t_min) / len;
         ub[_n_step * u_dim_ + k] = 40.0 * 0.1 * (t_max - t_min) / len;
     }
-    lb[_n_step * u_dim_ + _n_step] = t_index[0] + 1e-3 > t_max ? t_max : (t_index[0] + 1e-3);
+    lb[_n_step * u_dim_ + _n_step] = t_min;//t_index[0] + 1e-3 > t_max ? t_max : (t_index[0] + 1e-3);
     ub[_n_step * u_dim_ + _n_step] = t_max;
     opt_.set_lower_bounds(lb);
     opt_.set_upper_bounds(ub);
@@ -629,8 +630,16 @@ int NominalMpcc::solve(const Matrix<double, x_dim_, 1> &state,
     t_max_ = t_max;
     last_u_ = last_u;
     disturbance_acc_ = disturbance_acc;
+    dynobs_ = &dynobs;
     for (int k = 0; k < _n_step; k++) {
         ref_u_.row(k) << 0, 0, 0, this->hover_ratio_;
+    }
+
+    if (past_disturbances_.size() >= 10) {
+        past_disturbances_.pop_back();
+        past_disturbances_.push_front(disturbance_acc);
+    } else {
+        past_disturbances_.push_front(disturbance_acc);
     }
 
     double minf;
@@ -662,47 +671,86 @@ int NominalMpcc::solve(const Matrix<double, x_dim_, 1> &state,
     } catch(exception &e) {
         auto afterTime = chrono::steady_clock::now();
         solve_time = chrono::duration<double>(afterTime - beforeTime).count();
-        cerr << "nlopt failed: " << e.what() << endl;
-
-        for (int k = 0; k < _n_step; k++) {
-            u(k, 0) = uv[k * u_dim_ + 0];
-            u(k, 1) = uv[k * u_dim_ + 1];
-            u(k, 2) = uv[k * u_dim_ + 2];
-            u(k, 3) = uv[k * u_dim_ + 3];
-        }
-        for (int k = 0; k < _n_step; k++) {
-            x_predict.row(k) = state_[k];
-        }
-        t_index[0] = uv[u_dim_ * _n_step + _n_step];
-        for (int k = 0; k < _n_step; k++) {
-            t_index[k + 1] = t_index[k] + uv[u_dim_ * _n_step + k];
-        }
-
-        // uv = tmp_u_;
-        // vector<double> grad(uv.size());
-        // VectorXd grad2(uv.size());
-        // flag = false;
-        // double cost = cost_func(uv, grad, this);
-        // double vub[_n_step * 3];
-        // double vub_g[_n_step * 3 * (_n_step * u_dim_ + _n_step + 1)];
-        // double vub_g2[_n_step * 3 * (_n_step * u_dim_ + _n_step + 1)];
-        // flag = false;
-        // for (int i = 0; i < uv.size(); i++) {
-        //     double delta = 1e-8;
-        //     vector<double> uv_new = uv;
-        //     uv_new[i] += delta;
-        //     vector<double> grad(uv.size());
-        //     double cost_new = cost_func(uv_new, grad, this);
-        //     double vub_new[_n_step * 3];
-        //     double vub_g[_n_step * 3 * (_n_step * u_dim_ + _n_step + 1)];
-        //     for (int j = 0; j < _n_step * 3; j++) {
-        //         vub_g2[j * uv.size() + i] = (vub_new[j] - vub[j]) / delta;
-        //     }
-        //     grad2[i] = (cost_new - cost) / delta;
+        // cout << "initial_state: " << state.transpose() << endl;
+        // cout << "estimated_disturbance: " << disturbance_acc.transpose() << " norm: " << disturbance_acc.norm() << endl;
+        // cout << "past estimated_disturbance: " << endl;
+        // for (auto d : past_disturbances_) {
+        //     cout << "    " << d.transpose() << endl;
         // }
-        
-        // cout << "grad: " << fixed << setprecision(8) << endl << vector2Vector(grad).transpose() << endl;
-        // cout << "grad2: " << fixed << setprecision(8) << endl << grad2.transpose() << endl;
+        // cerr << "nlopt failed: " << e.what() << endl;
+
+        // for (int k = 0; k < _n_step; k++) {
+        //     u(k, 0) = uv[k * u_dim_ + 0];
+        //     u(k, 1) = uv[k * u_dim_ + 1];
+        //     u(k, 2) = uv[k * u_dim_ + 2];
+        //     u(k, 3) = uv[k * u_dim_ + 3];
+        // }
+        // for (int k = 0; k < _n_step; k++) {
+        //     x_predict.row(k) = state_[k];
+        // }
+        // t_index[0] = uv[u_dim_ * _n_step + _n_step];
+        // for (int k = 0; k < _n_step; k++) {
+        //     t_index[k + 1] = t_index[k] + uv[u_dim_ * _n_step + k];
+        // }
+
+        // {
+        //     uv = tmp_u_;
+        //     vector<double> grad(uv.size());
+        //     VectorXd grad2(uv.size());
+        //     flag = false;
+        //     double cost = cost_func(uv, grad, this);
+        //     double vub[_n_step * 3];
+        //     double vub_g[_n_step * 3 * (_n_step * u_dim_ + _n_step + 1)];
+        //     double vub_g2[_n_step * 3 * (_n_step * u_dim_ + _n_step + 1)];
+        //     flag = false;
+        //     for (int i = 0; i < uv.size(); i++) {
+        //         double delta = 1e-4;
+        //         vector<double> uv_new = uv;
+        //         uv_new[i] += delta;
+        //         vector<double> grad(uv.size());
+        //         double cost_new = cost_func(uv_new, grad, this);
+        //         double vub_new[_n_step * 3];
+        //         double vub_g[_n_step * 3 * (_n_step * u_dim_ + _n_step + 1)];
+        //         for (int j = 0; j < _n_step * 3; j++) {
+        //             vub_g2[j * uv.size() + i] = (vub_new[j] - vub[j]) / delta;
+        //         }
+        //         grad2[i] = (cost_new - cost) / delta;
+        //     }
+
+        //     cout << "grad: " << fixed << setprecision(8) << endl << vector2Vector(grad).transpose() << endl;
+        //     cout << "grad2: " << fixed << setprecision(8) << endl << grad2.transpose() << endl;
+        // }
+
+        // {
+        //     uv = tmp_u_;
+        //     vector<double> grad(uv.size());
+        //     VectorXd grad2(uv.size());
+        //     flag = true;
+        //     double cost = cost_func(uv, grad, this);
+        //     double vub[_n_step * 3];
+        //     double vub_g[_n_step * 3 * (_n_step * u_dim_ + _n_step + 1)];
+        //     double vub_g2[_n_step * 3 * (_n_step * u_dim_ + _n_step + 1)];
+        //     flag = true;
+        //     for (int i = 0; i < uv.size(); i++) {
+        //         double delta = 1e-4;
+        //         vector<double> uv_new = uv;
+        //         uv_new[i] += delta;
+        //         vector<double> grad(uv.size());
+        //         double cost_new = cost_func(uv_new, grad, this);
+        //         double vub_new[_n_step * 3];
+        //         double vub_g[_n_step * 3 * (_n_step * u_dim_ + _n_step + 1)];
+        //         for (int j = 0; j < _n_step * 3; j++) {
+        //             vub_g2[j * uv.size() + i] = (vub_new[j] - vub[j]) / delta;
+        //         }
+        //         grad2[i] = (cost_new - cost) / delta;
+        //     }
+        //     flag = false;
+
+        //     cout << "grad: " << fixed << setprecision(8) << endl << vector2Vector(grad).transpose() << endl;
+        //     cout << "grad2: " << fixed << setprecision(8) << endl << grad2.transpose() << endl;
+        // }
+
+        // exit(0);
 
         return EXIT_FAILURE;
     }
