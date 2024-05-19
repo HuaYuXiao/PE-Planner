@@ -16,7 +16,6 @@ private:
     ros::Publisher mpcc_traj_pub_;
     ros::Publisher predict_traj_pub_;
     ros::Publisher collision_pub_;
-    ros::Publisher fanmesh_pub_;
     ros::Publisher dyn_obs_pub_;
     tf::TransformBroadcaster broadcaster;
     Vector3d map_size_;

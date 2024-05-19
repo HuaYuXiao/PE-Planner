@@ -8,7 +8,6 @@
         <param name="MAX_VEL" type="double" value="1.0"/>
         <param name="MAX_ACC" type="double" value="1.6"/>
         <param name="mu" type="double" value="1.0"/>
-        <param name="online_replan" type="bool" value="false"/>
     </node>
 
     <!-- 启动规划mission， 激光输入control_yaw_flag设为false，rgbd输入control_yaw_flag设为true -->

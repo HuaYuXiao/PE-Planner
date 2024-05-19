@@ -12,15 +12,12 @@
 #include "bspline_opt/bspline_optimizer2.hpp"
 #include "px4_interface/px4_interface.hpp"
 #include "mpcc/nominal_mpcc.hpp"
-#include "matplotlib/matplotlibcpp.hpp"
 // #include "quadrotor_dynamics/quad_simulator.hpp"
 #include "common/rotation_math.hpp"
 #include "disturbance_observer/gpiobserver.hpp"
 #include "logger/logger.hpp"
 #include "tracker/pid_tracker.hpp"
 #include "utils.hpp"
-
-namespace plt = matplotlibcpp;
 
 constexpr int n_step = NominalMpcc::_n_step;
 
@@ -36,16 +33,14 @@ int main(int argc, char **argv) {
     pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask);
 
     // Get parameters from the ROS parameter server
-    bool enable_dob, enable_mpcc, online_replan;
+    bool enable_dob, enable_mpcc;
     double MAX_VEL, MAX_ACC, mu;
-    std::string logger_name;
 
     nh.getParam("enable_dob", enable_dob);
     nh.getParam("enable_mpcc", enable_mpcc);
     nh.getParam("MAX_VEL", MAX_VEL);
     nh.getParam("MAX_ACC", MAX_ACC);
     nh.getParam("mu", mu);
-    nh.getParam("online_replan", online_replan);
 
     Logger logger(string(enable_dob == true ? "enable-DOB" : "disable-DOB") + "-"
         + string(enable_mpcc == true ? "enable-MPCC" : "disable-MPCC") + "-test");
@@ -61,10 +56,6 @@ int main(int argc, char **argv) {
 	{
 		cout << "shmget failed" << endl;
 	}
-	double* distur_set = (double*)shmat(shmId, NULL, 0);
-    distur_set[0] = 0.0;
-    distur_set[1] = 0.0;
-    distur_set[2] = 0.0;
 
     //PX4 interface
     Px4Interface px4("");
@@ -95,7 +86,9 @@ int main(int argc, char **argv) {
         0.6,      //max_duration
         1 / 50.,   //safety_check_res
         5.0);     //lamda_heu
+        // TODO: set the start and goal positions
     auto start_pos = Vector3d(1., 5., 1.0);
+    // TODO: set the goal position
     auto goal_pos = Vector3d(49.0, 5.0, 1.0);
     kino_astar.search(
         start_pos,
@@ -137,7 +130,8 @@ int main(int argc, char **argv) {
             MAX_VEL,    //vel_max
             MAX_ACC,    //acc_max 
             cost_history);
-    } else {
+    }
+    else{
         //t_sample *= 1.5;
         optimizer.optimize(ctrl_pts, start_pos,
             Vector3d(0, 0, 0), Vector3d(0, 0, 0), goal_pos, 
@@ -173,7 +167,6 @@ int main(int argc, char **argv) {
 
     cout << "B-spline duration: " << ctrl_pts.rows() * t_sample - 3 * t_sample << " s" << endl;
 
-    plt::figure(1);
     vector<double> arc_lengths, arc_t;
     auto start_t = chrono::steady_clock::now();
     double total_len = 0.0;
@@ -185,10 +178,6 @@ int main(int argc, char **argv) {
     }
     cout << "Total len: " << total_len << " m" << endl;
     auto spend = chrono::duration<double>(chrono::steady_clock::now() - start_t).count();
-    plt::plot(arc_t, arc_lengths, {{"color", "blue"}, {"linestyle", "-"}, {"label", "equal t"}});
-    plt::xlabel("t(s)");
-    plt::ylabel("length(m)");
-    plt::legend({{"fontsize", "8"}, {"loc", "upper left"}});
 
     logger.length_ = total_len;
 
@@ -213,7 +202,6 @@ int main(int argc, char **argv) {
 
     auto t0 = chrono::steady_clock::now();
 
-    double fan_ang = 0.;
     auto start_time = ros::Time::now();
     while((ros::Time::now() - start_time).toSec() < 6.0 && ros::ok()) {
         Vector3d pos = px4.pos();
@@ -223,7 +211,6 @@ int main(int argc, char **argv) {
         auto p = UniformBspline::getBsplineValue(t_sample, ctrl_pts, 3 * t_sample + 1e-6, 3);
         px4.set_pos(p[0], p[1], p[2], 1.57);
         rate.sleep();
-        fan_ang += M_PI / 180.0 * 10;
         for (auto &o : dynobs) {
             o.update(0.02);
         }
@@ -289,8 +276,6 @@ int main(int argc, char **argv) {
     u_opt.setZero();
     u_opt(3) = 0.309;
     double solve_t;
-    double distur_time_total = 1.0 / 0.02;
-    double distur_time = distur_time_total;
     Vector3d acc_r(0, 0, 0);
     int loop_cnt = 0;
     ros::Time past_vel_stamp = ros::Time::now();
@@ -384,88 +369,87 @@ int main(int argc, char **argv) {
         logger.solution_time_ = solve_t;
         logger.time_ = (ros::Time::now() - start_time).toSec();
 
-        if (online_replan) {
-            auto time_ = chrono::steady_clock::now();
-            //global planner
-            kino_astar.set_param(
-                10., //w_time 2.5
-                MAX_VEL,  //max_vel
-                MAX_ACC,  //max_acc
-                1.0 + 1.0 / 10000, //tie_breaker
-                1 / 2.0,  //acc_resolution
-                1 / 1.0,      //time_resolution
-                0.6,      //max_duration
-                1 / 50.,   //safety_check_res
-                5.0);     //lamda_heu
-            Vector3d vel_limed;
-            vel_limed = vel / (vel - Vector3d(MAX_VEL, MAX_VEL, MAX_VEL)).cwiseAbs().maxCoeff() * MAX_VEL;
-            kino_astar.search(
-                pos,
-                vel_limed,
-                goal_pos,
-                Vector3d(0., 0., 0.),
-                &dynobs);
-            t_sample = 0.2;
-            auto kino_path = kino_astar.get_sample_path(t_sample);
-            kino_path.first.push_back(goal_pos);
-            ros_inte.publish_kino_traj(kino_path.first);
+        auto time_ = chrono::steady_clock::now();
+        //global planner
+        kino_astar.set_param(
+            10., //w_time 2.5
+            MAX_VEL,  //max_vel
+            MAX_ACC,  //max_acc
+            1.0 + 1.0 / 10000, //tie_breaker
+            1 / 2.0,  //acc_resolution
+            1 / 1.0,      //time_resolution
+            0.6,      //max_duration
+            1 / 50.,   //safety_check_res
+            5.0);     //lamda_heu
+        Vector3d vel_limed;
+        vel_limed = vel / (vel - Vector3d(MAX_VEL, MAX_VEL, MAX_VEL)).cwiseAbs().maxCoeff() * MAX_VEL;
+        kino_astar.search(
+            pos,
+            vel_limed,
+            goal_pos,
+            Vector3d(0., 0., 0.),
+            &dynobs);
+        t_sample = 0.2;
+        auto kino_path = kino_astar.get_sample_path(t_sample);
+        kino_path.first.push_back(goal_pos);
+        ros_inte.publish_kino_traj(kino_path.first);
 
-            //trajectory parameterization
-            vector<Vector3d> vels, accs;
-            vels.push_back(Vector3d::Zero());
-            vels.push_back(Vector3d::Zero());
-            accs.push_back(Vector3d::Zero());
-            accs.push_back(Vector3d::Zero());
-            UniformBspline::parameter2Bspline(t_sample, kino_path.first, vels, accs, ctrl_pts);
+        //trajectory parameterization
+        vector<Vector3d> vels, accs;
+        vels.push_back(Vector3d::Zero());
+        vels.push_back(Vector3d::Zero());
+        accs.push_back(Vector3d::Zero());
+        accs.push_back(Vector3d::Zero());
+        UniformBspline::parameter2Bspline(t_sample, kino_path.first, vels, accs, ctrl_pts);
 
-            //B-spline trajectory optimization
-            BsplineOptimizer optimizer;
-            vector<tuple<double, double, double, double, double, double>> cost_history;
-            if (ctrl_pts.size() <= 12) {
-                break;
-            }
-            MatrixXd new_ctrl_pts;
-            Vector3d tmp_goal = goal_pos;
-            if (ctrl_pts.rows() > 10) {
-                new_ctrl_pts = ctrl_pts.block(0, 0, 10, ctrl_pts.cols());
-                ctrl_pts = new_ctrl_pts;
-                tmp_goal = UniformBspline::getBsplineValue(t_sample, ctrl_pts, ctrl_pts.rows() * t_sample - 1e-3, 3);
-            }
-            optimizer.optimize(ctrl_pts, pos,
-                vel, acc_r, tmp_goal,
-                Vector3d(0, 0, 0), Vector3d(0, 0, 0), &sdfmap, t_sample,
-                100.0,  //lambda_s
-                5000.0,   //lambda_c
-                10.,    //lambda_v
-                0.1,    //lambda_a
-                0.0,    //lambda_l
-                0.0,      //lambda_dl 0.1
-                10000,   //lambda_ep
-                100,   //lambda_ev 100
-                0,   //lambda_ea 10
-                0.4,   //risk_dis
-                MAX_VEL,    //vel_max
-                MAX_ACC,    //acc_max
-                cost_history,
-                &dynobs);
-            v_ctrl_pts = UniformBspline::getDerivativeCtrlPts(ctrl_pts, t_sample);
-            a_ctrl_pts = UniformBspline::getDerivativeCtrlPts(v_ctrl_pts, t_sample);
-            vector<Vector3d> opt_bsp_p, opt_bsp_v, opt_bsp_a;
-            vector<double> opt_t_list;
-            for (double t = 3 * t_sample; t < ctrl_pts.rows() * t_sample + 1e-6; t += t_sample * 1) {
-                auto p = UniformBspline::getBsplineValue(t_sample, ctrl_pts, t, 3);
-                auto v = UniformBspline::getBsplineValue(t_sample, v_ctrl_pts, t - t_sample, 2);
-                auto a = UniformBspline::getBsplineValue(t_sample, a_ctrl_pts, t - t_sample - t_sample, 1);
-                opt_bsp_p.push_back(p);
-                opt_bsp_v.push_back(v);
-                opt_bsp_a.push_back(a);
-                opt_t_list.push_back(t);
-            }
-            ros_inte.publish_bspline_traj(opt_bsp_p);
-            double spend = chrono::duration<double>(chrono::steady_clock::now() - time_).count();
-            // cout << "spend: " << spend * 1e3 << " ms" << endl;
-            solve_times.push_back(spend);
+        //B-spline trajectory optimization
+        BsplineOptimizer optimizer;
+        vector<tuple<double, double, double, double, double, double>> cost_history;
+        if (ctrl_pts.size() <= 12) {
+            break;
         }
+        MatrixXd new_ctrl_pts;
+        Vector3d tmp_goal = goal_pos;
+        if (ctrl_pts.rows() > 10) {
+            new_ctrl_pts = ctrl_pts.block(0, 0, 10, ctrl_pts.cols());
+            ctrl_pts = new_ctrl_pts;
+            tmp_goal = UniformBspline::getBsplineValue(t_sample, ctrl_pts, ctrl_pts.rows() * t_sample - 1e-3, 3);
+        }
+        optimizer.optimize(ctrl_pts, pos,
+            vel, acc_r, tmp_goal,
+            Vector3d(0, 0, 0), Vector3d(0, 0, 0), &sdfmap, t_sample,
+            100.0,  //lambda_s
+            5000.0,   //lambda_c
+            10.,    //lambda_v
+            0.1,    //lambda_a
+            0.0,    //lambda_l
+            0.0,      //lambda_dl 0.1
+            10000,   //lambda_ep
+            100,   //lambda_ev 100
+            0,   //lambda_ea 10
+            0.4,   //risk_dis
+            MAX_VEL,    //vel_max
+            MAX_ACC,    //acc_max
+            cost_history,
+            &dynobs);
+        v_ctrl_pts = UniformBspline::getDerivativeCtrlPts(ctrl_pts, t_sample);
+        a_ctrl_pts = UniformBspline::getDerivativeCtrlPts(v_ctrl_pts, t_sample);
+        vector<Vector3d> opt_bsp_p, opt_bsp_v, opt_bsp_a;
+        vector<double> opt_t_list;
+        for (double t = 3 * t_sample; t < ctrl_pts.rows() * t_sample + 1e-6; t += t_sample * 1) {
+            auto p = UniformBspline::getBsplineValue(t_sample, ctrl_pts, t, 3);
+            auto v = UniformBspline::getBsplineValue(t_sample, v_ctrl_pts, t - t_sample, 2);
+            auto a = UniformBspline::getBsplineValue(t_sample, a_ctrl_pts, t - t_sample - t_sample, 1);
+            opt_bsp_p.push_back(p);
+            opt_bsp_v.push_back(v);
+            opt_bsp_a.push_back(a);
+            opt_t_list.push_back(t);
+        }
+        ros_inte.publish_bspline_traj(opt_bsp_p);
+        double spend = chrono::duration<double>(chrono::steady_clock::now() - time_).count();
+        // cout << "spend: " << spend * 1e3 << " ms" << endl;
+        solve_times.push_back(spend);
+
 
         if (enable_mpcc) {
             //MPCC
@@ -502,9 +486,8 @@ int main(int argc, char **argv) {
         } else {
             solve_times.push_back(0);
             double t = loop_cnt * 0.02;
-            if (online_replan) {
                 t = 0.02;
-            }
+
             if (t > t_sample * (ctrl_pts.rows() - 3)) {
                 t = t_sample * (ctrl_pts.rows() - 3);
                 if (reach_cnt-- < 0)
@@ -542,17 +525,6 @@ int main(int argc, char **argv) {
 
         logger.update();
 
-        if (pos.x() > 30.0 && distur_time > 0) {//(pos.x() > 30.0 && distur_time > 0) {
-            distur_set[0] = 0.0;//min(1.0, distur_set[0] + 0.2);
-            distur_set[1] = 0.0;//min(1.0, distur_set[1] + 0.2);
-            distur_set[2] = 0.0;
-            distur_time--;
-        } else {
-            distur_set[0] = 0.0;//max(0.0, distur_set[0] - 0.2);
-            distur_set[1] = 0.0;//max(0.0, distur_set[1] - 0.2);
-            distur_set[2] = 0.0;
-        }
-
         // rate.sleep();
         past_vel_stamp = vel_stamp;
         ros::spinOnce();
@@ -575,20 +547,6 @@ int main(int argc, char **argv) {
     mean_p_err /= loop_cnt;
     mean_nominal_p_err /= loop_cnt;
 
-    // cout << "Mean solution time: " << fixed << setprecision(3)
-    //     << accumulate(solve_times.begin(), solve_times.end(), 0.0) / solve_times.size() * 1e3
-    //     << " ms" << endl;
-    // cout << "mean_acc_norm_err: " << mean_acc_norm_err << " m/s^2" << endl;
-    // cout << "mean_nominal_acc_norm_err: " << mean_nominal_acc_norm_err << " m/s^2" << endl;
-    // cout << "mean_v_norm_err: " << mean_v_norm_err << " m/s" << endl;
-    // cout << "mean_nominal_v_norm_err: " << mean_nominal_v_norm_err << " m/s" << endl;
-    // cout << fixed << setprecision(6) << "mean_p_err: " << mean_p_err << " m" << endl;
-    // cout << fixed << setprecision(6) << "mean_nominal_p_err: " << mean_nominal_p_err << " m" << endl;
-
-    // cout << "mean velocity related to reference traj: " << total_len / t_list[t_list.size() - 1] << " m/s" << endl;
-    // cout << "mean velocity related to real traj: " << accumulate(vel_norm.begin(), vel_norm.end(), 0.0) / vel_norm.size() << " m/s" << endl;
-    // cout << "minimum distance to nearest obstacle: " << *min_element(dis_to_obs.begin(), dis_to_obs.end()) << " m" << endl;
-
     start_time = ros::Time::now();
     while((ros::Time::now() - start_time).toSec() < 8.0 && ros::ok()) {
         Vector3d pos = px4.pos();
@@ -598,112 +556,12 @@ int main(int argc, char **argv) {
         auto p = UniformBspline::getBsplineValue(t_sample, ctrl_pts, 3 * t_sample + 1e-6, 3);
         px4.set_pos(p[0], p[1], p[2], 1.57);
         rate.sleep();
-        fan_ang += M_PI / 180.0 * 10;
         ros::spinOnce();
     }
 
     px4.set_px4_mode("POSCTL");
 
     ros_inte.publish_mpcc_traj(mpcc_traj);
-    
-    plt::figure(3);
-    plt::plot(t_list, vel_norm, {{"color", "gold"}, {"linestyle", "-"}, {"label", "real_norm"}});
-    plt::plot(t_list, sim_vel_norm, {{"color", "gold"}, {"linestyle", "--"}, {"label", "sim_norm"}});
-    plt::plot(t_list, vel_x_list, {{"color", "green"}, {"linestyle", "-"}, {"label", "x"}});
-    plt::plot(t_list, vel_y_list, {{"color", "red"}, {"linestyle", "-"}, {"label", "y"}});
-    plt::plot(t_list, vel_z_list, {{"color", "blue"}, {"linestyle", "-"}, {"label", "z"}});
-    plt::xlabel("t(s)");
-    plt::ylabel("velocity(m/s)");
-    plt::legend({{"fontsize", "8"}, {"loc", "upper left"}});
-
-    plt::figure(4);
-    plt::plot(t_list, r_list, {{"color", "green"}, {"linestyle", "-"}, {"label", "roll"}});
-    plt::plot(t_list, p_list, {{"color", "red"}, {"linestyle", "-"}, {"label", "pitch"}});
-    plt::plot(t_list, y_list, {{"color", "blue"}, {"linestyle", "-"}, {"label", "yaw"}});
-    plt::plot(t_list, tilt_list, {{"color", "gold"}, {"linestyle", "-"}, {"label", "tilt angle"}});
-    plt::xlabel("t(s)");
-    plt::ylabel("angle(degree)");
-    plt::ylim(-180, 180);
-    plt::legend({{"fontsize", "8"}, {"loc", "upper left"}});
-
-    plt::figure(5);
-    plt::plot(t_list, rr_list, {{"color", "green"}, {"linestyle", "-"}, {"label", "roll"}});
-    plt::plot(t_list, pr_list, {{"color", "red"}, {"linestyle", "-"}, {"label", "pitch"}});
-    plt::plot(t_list, yr_list, {{"color", "blue"}, {"linestyle", "-"}, {"label", "yaw"}});
-    plt::plot(t_list, real_rr_list, {{"color", "green"}, {"linestyle", "--"}, {"label", "real roll"}});
-    plt::plot(t_list, real_pr_list, {{"color", "red"}, {"linestyle", "--"}, {"label", "real pitch"}});
-    plt::plot(t_list, real_yr_list, {{"color", "blue"}, {"linestyle", "--"}, {"label", "real yaw"}});
-    // vector<double> pi_list, npi_list;
-    plt::xlabel("t(s)");
-    plt::ylabel("rate(degree/s)");
-    plt::ylim(-180 * 2, 180 * 2);
-    plt::legend({{"fontsize", "8"}, {"loc", "upper left"}});
-
-    plt::figure(6);
-    plt::plot(t_list, dis_to_obs, {{"color", "green"}, {"linestyle", "-"}, {"label", "real"}});
-    // plt::plot(t_list, dis_to_obs_sim, {{"color", "red"}, {"linestyle", "-"}, {"label", "sim_dt=0.02"}});
-    // plt::plot(t_list, dis_to_obs_sim2, {{"color", "blue"}, {"linestyle", "-"}, {"label", "sim_dt=0.1"}});
-    plt::xlabel("t(s)");
-    plt::ylabel("distance to nearest obstacle(m)");
-    plt::ylim(0., 0.4);
-
-    plt::figure(7);
-    plt::plot(t_list, thr_list, {{"color", "green"}, {"linestyle", "-"}});
-    plt::xlabel("t(s)");
-    plt::ylabel("thrust(%)");
-    plt::ylim(0, 1);
-
-    plt::figure(8);
-    plt::plot(t_list, acc_list, {{"color", "gold"}, {"linestyle", "-"}, {"label", "real_norm"}});
-    plt::plot(t_list, sim_acc_list, {{"color", "gold"}, {"linestyle", "--"}, {"label", "sim_norm"}});
-    plt::plot(t_list, acc_x_list, {{"color", "green"}, {"linestyle", "-"}, {"label", "real_x"}});
-    plt::plot(t_list, sim_acc_x_list, {{"color", "green"}, {"linestyle", "--"}, {"label", "sim_x"}});
-    plt::plot(t_list, acc_y_list, {{"color", "red"}, {"linestyle", "-"}, {"label", "real_y"}});
-    plt::plot(t_list, sim_acc_y_list, {{"color", "red"}, {"linestyle", "--"}, {"label", "sim_y"}});
-    plt::plot(t_list, acc_z_list, {{"color", "blue"}, {"linestyle", "-"}, {"label", "real_z"}});
-    plt::plot(t_list, sim_acc_z_list, {{"color", "blue"}, {"linestyle", "--"}, {"label", "sim_z"}});
-    plt::xlabel("t(s)");
-    plt::ylabel("acceleration(m/s^2)");
-    plt::legend();
-    plt::ylim(-9.81 * 2, 9.81 * 2);
-
-    plt::figure(9);
-    plt::plot(t_list, solve_times, {{"color", "green"}, {"linestyle", "-"}});
-    plt::xlabel("t(s)");
-    plt::ylabel("solution time(s)");
-    plt::ylim(0., 0.2);
-
-    plt::figure(10);
-    plt::scatter(vel_x_list, acc_x_err_list, 1.0, {{"color", "green"}, {"marker", "x"}, {"label", "x"}});
-    plt::scatter(vel_y_list, acc_y_err_list, 1.0, {{"color", "red"}, {"marker", "x"}, {"label", "y"}});
-    plt::scatter(vel_z_list, acc_z_err_list, 1.0, {{"color", "blue"}, {"marker", "x"}, {"label", "z"}});
-    plt::xlabel("velocity(m/s)");
-    plt::ylabel("acceleration(m/s^2)");
-    plt::legend();
-
-    plt::figure(11);
-    // plt::plot(t_list, nominal_acc_x_err_list, {{"color", "green"}, {"linestyle", "-"}, {"label", "x"}});
-    // plt::plot(t_list, nominal_acc_y_err_list, {{"color", "red"}, {"linestyle", "-"}, {"label", "y"}});
-    // plt::plot(t_list, nominal_acc_z_err_list, {{"color", "blue"}, {"linestyle", "-"}, {"label", "z"}});
-    plt::plot(t_list, dob_dx_list, {{"color", "green"}, {"linestyle", "-"}, {"label", "x"}});
-    plt::plot(t_list, dob_dy_list, {{"color", "red"}, {"linestyle", "-"}, {"label", "y"}});
-    plt::plot(t_list, dob_dz_list, {{"color", "blue"}, {"linestyle", "-"}, {"label", "z"}});
-    plt::xlabel("t(s)");
-    plt::ylabel("disturbance acceleration(m/s^2)");
-    plt::ylim(-10, 10);
-    plt::legend();
-
-    plt::figure(12);
-    plt::plot(t_list, vel_x_list, {{"color", "green"}, {"linestyle", "-"}, {"label", "x"}});
-    plt::plot(t_list, vel_y_list, {{"color", "red"}, {"linestyle", "-"}, {"label", "y"}});
-    plt::plot(t_list, vel_z_list, {{"color", "blue"}, {"linestyle", "-"}, {"label", "z"}});
-    plt::plot(t_list, dob_vx_list, {{"color", "green"}, {"linestyle", "--"}, {"label", "x_hat"}});
-    plt::plot(t_list, dob_vy_list, {{"color", "red"}, {"linestyle", "--"}, {"label", "y_hat"}});
-    plt::plot(t_list, dob_vz_list, {{"color", "blue"}, {"linestyle", "--"}, {"label", "z_hat"}});
-    plt::xlabel("t(s)");
-    plt::ylabel("velocity(m/s^2)");
-    plt::ylim(-10, 10);
-    plt::legend();
 
     vector<double> v_x, v_y, v_z, v_norm, a_x, a_y, a_z, a_norm;
     t_list.clear();
@@ -721,28 +579,6 @@ int main(int argc, char **argv) {
         a_z.push_back(a.z());
         a_norm.push_back(a.norm());
     }
-
-    plt::figure(13);
-    plt::plot(t_list, v_x, {{"color", "green"}, {"linestyle", "-"}, {"label", "x"}});
-    plt::plot(t_list, v_y, {{"color", "red"}, {"linestyle", "-"}, {"label", "y"}});
-    plt::plot(t_list, v_z, {{"color", "blue"}, {"linestyle", "-"}, {"label", "z"}});
-    plt::plot(t_list, v_norm, {{"color", "gold"}, {"linestyle", "-"}, {"label", "norm"}});
-    plt::xlabel("t(s)");
-    plt::ylabel("velocity(m/s)");
-    plt::ylim(-10, 10);
-    plt::legend();
-
-    plt::figure(14);
-    plt::plot(t_list, a_x, {{"color", "green"}, {"linestyle", "-"}, {"label", "x"}});
-    plt::plot(t_list, a_y, {{"color", "red"}, {"linestyle", "-"}, {"label", "y"}});
-    plt::plot(t_list, a_z, {{"color", "blue"}, {"linestyle", "-"}, {"label", "z"}});
-    plt::plot(t_list, a_norm, {{"color", "gold"}, {"linestyle", "-"}, {"label", "norm"}});
-    plt::xlabel("t(s)");
-    plt::ylabel("acceleration(m/s^2)");
-    plt::ylim(-20, 20);
-    plt::legend();
-
-    plt::show();
 
     return 0;
 }

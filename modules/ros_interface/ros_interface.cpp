@@ -21,7 +21,6 @@ RosInterface::RosInterface(Vector3d map_size)
     mpcc_traj_pub_ = nh.advertise<visualization_msgs::Marker>("/mpcc_traj", 1);
     predict_traj_pub_ = nh.advertise<visualization_msgs::Marker>("/predict_traj", 1);
     collision_pub_ = nh.advertise<visualization_msgs::Marker>("/collision", 1);
-    fanmesh_pub_ = nh.advertise<visualization_msgs::Marker>("/fan", 1);
     dyn_obs_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/dyn_obs", 1);
 }
 
