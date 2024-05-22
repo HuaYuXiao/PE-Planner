@@ -1,15 +1,12 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
-
 #include "numeric"
-
-#include "map/map.hpp"
-#include "map/sdf.hpp"
+#include "plan_env/map.hpp"
+#include "plan_env/sdf.hpp"
 #include "ros_interface/ros_interface.hpp"
-#include "kinodynamic_astar/kinodynamic_astar.hpp"
-#include "bspline/uniform_bspline.hpp"
-#include "bspline_opt/bspline_optimizer.hpp"
-#include "bspline_opt/bspline_optimizer2.hpp"
+#include "path_searching/kinodynamic_astar.hpp"
+#include "bspline_opt/uniform_bspline.hpp"
+#include "bspline_opt/bspline_optimizer_pe.hpp"
 #include "px4_interface/px4_interface.hpp"
 #include "mpcc/nominal_mpcc.hpp"
 // #include "quadrotor_dynamics/quad_simulator.hpp"
@@ -59,7 +56,8 @@ int main(int argc, char **argv) {
 
     //PX4 interface
     Px4Interface px4("");
-    // QuadSimulator px4(0.309);
+
+    cout << "[planner] px4 initialized" << endl;
 
     // TODO: construct map Ptr?
     GridMap gridmap;

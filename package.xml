@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
 <package format="2">
   <name>pe_planner</name>
-  <version>1.1.0</version>
+  <version>1.1.2</version>
   <description>
     A performance-enhanced Quadrotor motion planner
   </description>
-  <maintainer email="hyx020222@gmail.com">Eason Hua</maintainer>
+  <maintainer email="12010508@mail.sustech.edu.cn">Eason Hua</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>catkin</buildtool_depend>
@@ -13,18 +13,13 @@
   <depend>tf</depend>
   <depend>roscpp</depend>
   <depend>std_msgs</depend>
+  <depend>bspline_opt</depend>
+  <depend>plan_env</depend>
+  <depend>path_searching</depend>
 
-  <build_depend>plan_env</build_depend>
-  <build_depend>path_searching</build_depend>
-  <build_depend>bspline_opt</build_depend>
   <build_depend>traj_utils</build_depend>
 
-   <build_export_depend>bspline_opt</build_export_depend>
-
   <exec_depend>message_runtime</exec_depend>
-  <exec_depend>plan_env</exec_depend>
-  <exec_depend>path_searching</exec_depend>
-  <exec_depend>bspline_opt</exec_depend>
   <exec_depend>traj_utils</exec_depend>
 
   <export>

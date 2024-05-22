@@ -2,9 +2,8 @@
 
 #include <ros/ros.h>
 #include <tf/transform_broadcaster.h>
-
-#include "map/map.hpp"
-#include "map/sdf.hpp"
+#include "plan_env/map.hpp"
+#include "plan_env/sdf.hpp"
 
 class RosInterface {
 private:

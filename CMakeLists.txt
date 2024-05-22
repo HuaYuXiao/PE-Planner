@@ -13,27 +13,27 @@ find_package(catkin REQUIRED COMPONENTS
         roslib
         roscpp
         tf
+        plan_env
+        bspline_opt
+        path_searching
 )
 
 include_directories(
         SYSTEM
+        include
         ${catkin_INCLUDE_DIRS}
         ${EIGEN3_INCLUDE_DIR}
         ${PCL_INCLUDE_DIRS}
         /usr/lib/include
-        ${PROJECT_SOURCE_DIR}/include
         modules
 )
+
 link_directories(/usr/local/lib)
 
 add_executable(planner_px4
     src/planner_px4_main.cpp
     modules/mpcc/nominal_mpcc.cpp
-    modules/map/map.cpp
     modules/ros_interface/ros_interface.cpp
-    modules/kinodynamic_astar/kinodynamic_astar.cpp
-    modules/bspline_opt/bspline_optimizer.cpp
-    modules/bspline_opt/bspline_optimizer2.cpp
     modules/px4_interface/px4_interface.cpp
 )
 target_link_libraries(planner_px4
@@ -41,13 +41,4 @@ target_link_libraries(planner_px4
         Python3::NumPy
         nlopt
         ${catkin_LIBRARIES}
-)
-
-add_executable(map_viewer
-    src/map_viewer.cpp
-    modules/map/map.cpp
-    modules/ros_interface/ros_interface.cpp
-)
-target_link_libraries(map_viewer
-    ${catkin_LIBRARIES}
 )
