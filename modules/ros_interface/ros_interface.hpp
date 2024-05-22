@@ -2,9 +2,8 @@
 
 #include <ros/ros.h>
 #include <tf/transform_broadcaster.h>
-
-#include "map/map.hpp"
-#include "map/sdf.hpp"
+#include "plan_env/map.hpp"
+#include "plan_env/sdf.hpp"
 
 class RosInterface {
 private:
@@ -16,7 +15,6 @@ private:
     ros::Publisher mpcc_traj_pub_;
     ros::Publisher predict_traj_pub_;
     ros::Publisher collision_pub_;
-    ros::Publisher fanmesh_pub_;
     ros::Publisher dyn_obs_pub_;
     tf::TransformBroadcaster broadcaster;
     Vector3d map_size_;
@@ -30,7 +28,5 @@ public:
     void publish_mpcc_traj(vector<Vector3d> &traj);
     void publish_predict_traj(vector<Vector3d> &traj);
     void publish_collision(vector<Vector3d> &pos);
-    void publish_fanmesh(Vector3d pos, Vector3d ang);
     void publish_dyn_obs(vector<DynObs> &obs);
-    void publish_pose(Vector3d pos, Vector4d quat);
 };

@@ -21,7 +21,6 @@ RosInterface::RosInterface(Vector3d map_size)
     mpcc_traj_pub_ = nh.advertise<visualization_msgs::Marker>("/mpcc_traj", 1);
     predict_traj_pub_ = nh.advertise<visualization_msgs::Marker>("/predict_traj", 1);
     collision_pub_ = nh.advertise<visualization_msgs::Marker>("/collision", 1);
-    fanmesh_pub_ = nh.advertise<visualization_msgs::Marker>("/fan", 1);
     dyn_obs_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/dyn_obs", 1);
 }
 
@@ -47,7 +46,7 @@ void RosInterface::publish_grid_map(GridMap &map) {
 
     sensor_msgs::PointCloud2 globalMap_pcd;
     pcl::toROSMsg(cloudMap, globalMap_pcd);
-    globalMap_pcd.header.frame_id = "world";
+    globalMap_pcd.header.frame_id = "map";
     grid_map_pub_.publish(globalMap_pcd);
 }
 
@@ -72,13 +71,13 @@ void RosInterface::publish_sdf_map(SdfMap &sdf) {
 
     sensor_msgs::PointCloud2 globalMap_pcd;
     pcl::toROSMsg(cloudMap, globalMap_pcd);
-    globalMap_pcd.header.frame_id = "world";
+    globalMap_pcd.header.frame_id = "map";
     sdf_map_pub_.publish(globalMap_pcd);
 }
 
 void RosInterface::publish_quadmesh(Vector3d pos, Vector4d quat) {
     visualization_msgs::Marker meshROS;
-    meshROS.header.frame_id = "world";
+    meshROS.header.frame_id = "map";
     meshROS.header.stamp = ros::Time::now(); 
     meshROS.ns = "quadmesh";
     meshROS.id = 0;
@@ -106,36 +105,9 @@ void RosInterface::publish_quadmesh(Vector3d pos, Vector4d quat) {
     quadmesh_pub_.publish(meshROS);     
 }
 
-void RosInterface::publish_fanmesh(Vector3d pos, Vector3d ang) {
-    visualization_msgs::Marker meshROS;
-    meshROS.header.frame_id = "world";
-    meshROS.header.stamp = ros::Time::now(); 
-    meshROS.ns = "fenmesh";
-    meshROS.id = 0;
-    meshROS.type = visualization_msgs::Marker::MESH_RESOURCE;
-    meshROS.action = visualization_msgs::Marker::ADD;
-    meshROS.pose.position.x = pos.x() - map_size_(0) / 2.0;
-    meshROS.pose.position.y = pos.y() - map_size_(1) / 2.0;
-    meshROS.pose.position.z = pos.z();
-    Quaterniond q = AngleAxisd(ang[2], Vector3d::UnitZ()) * AngleAxisd(ang[1], Vector3d::UnitY()) * AngleAxisd(ang[0], Vector3d::UnitX());
-    meshROS.pose.orientation.w = q.w();
-    meshROS.pose.orientation.x = q.x();
-    meshROS.pose.orientation.y = q.y();
-    meshROS.pose.orientation.z = q.z();
-    meshROS.scale.x = 0.002;
-    meshROS.scale.y = 0.002;
-    meshROS.scale.z = 0.002;
-    meshROS.color.a = 1.0;
-    meshROS.color.r = 0.0;
-    meshROS.color.g = 1.0;
-    meshROS.color.b = 0.0;
-    meshROS.mesh_resource = std::string("file:///home/jiaxin/workspace/PX4/quadrotor_mpc/meshes/fan.stl");
-    fanmesh_pub_.publish(meshROS);     
-}
-
 void RosInterface::publish_kino_traj(vector<Vector3d> &traj) {
     visualization_msgs::Marker tr;
-    tr.header.frame_id = "world";
+    tr.header.frame_id = "map";
     tr.header.stamp = ros::Time::now(); 
     tr.ns = "kino trajectory";
     tr.action = visualization_msgs::Marker::ADD;
@@ -163,7 +135,7 @@ void RosInterface::publish_kino_traj(vector<Vector3d> &traj) {
 
 void RosInterface::publish_bspline_traj(vector<Vector3d> &traj) {
     visualization_msgs::Marker tr;
-    tr.header.frame_id = "world";
+    tr.header.frame_id = "map";
     tr.header.stamp = ros::Time::now(); 
     tr.ns = "bspline trajectory";
     tr.action = visualization_msgs::Marker::ADD;
@@ -191,7 +163,7 @@ void RosInterface::publish_bspline_traj(vector<Vector3d> &traj) {
 
 void RosInterface::publish_mpcc_traj(vector<Vector3d> &traj) {
     visualization_msgs::Marker tr;
-    tr.header.frame_id = "world";
+    tr.header.frame_id = "map";
     tr.header.stamp = ros::Time::now(); 
     tr.ns = "mpcc trajectory";
     tr.action = visualization_msgs::Marker::ADD;
@@ -219,7 +191,7 @@ void RosInterface::publish_mpcc_traj(vector<Vector3d> &traj) {
 
 void RosInterface::publish_predict_traj(vector<Vector3d> &traj) {
     visualization_msgs::Marker tr;
-    tr.header.frame_id = "world";
+    tr.header.frame_id = "map";
     tr.header.stamp = ros::Time::now(); 
     tr.ns = "predict trajectory";
     tr.action = visualization_msgs::Marker::ADD;
@@ -247,7 +219,7 @@ void RosInterface::publish_predict_traj(vector<Vector3d> &traj) {
 
 void RosInterface::publish_collision(vector<Vector3d> &pos) {
     visualization_msgs::Marker cp;
-    cp.header.frame_id = "world";
+    cp.header.frame_id = "map";
     cp.header.stamp = ros::Time::now(); 
     cp.ns = "collision";
     cp.action = visualization_msgs::Marker::ADD;
@@ -294,26 +266,6 @@ void RosInterface::publish_dyn_obs(vector<DynObs> &obs) {
 
     sensor_msgs::PointCloud2 dynobs_pcd;
     pcl::toROSMsg(cloudMap, dynobs_pcd);
-    dynobs_pcd.header.frame_id = "world";
+    dynobs_pcd.header.frame_id = "map";
     dyn_obs_pub_.publish(dynobs_pcd);
-}
-
-void RosInterface::publish_pose(Vector3d pos, Vector4d quat) {
-    geometry_msgs::PoseStamped pose;
-    pose.header.frame_id = "world";
-    pose.header.stamp = ros::Time::now();
-    pose.pose.position.x = pos.x() - map_size_(0) / 2.0;
-    pose.pose.position.y = pos.y() - map_size_(1) / 2.0;
-    pose.pose.position.z = pos.z();
-    pose.pose.orientation.x = quat.x();
-    pose.pose.orientation.y = quat.y();
-    pose.pose.orientation.z = quat.z();
-    pose.pose.orientation.w = quat.w();
-    tf::Transform transform;
-    transform.setOrigin(tf::Vector3(pos.x() - map_size_(0) / 2.0, pos.y() - map_size_(1) / 2.0, pos.z()));
-    Vector3d ang = quaternion_to_rpy(Quaterniond(quat.w(), quat.x(), quat.y(), quat.z()));
-    ang(1) = ang(0) = 0;
-    Quaterniond q = rpy_to_quaternion(ang);
-    transform.setRotation(tf::Quaternion(quat.x(), quat.y(), quat.z(), quat.w()));
-    broadcaster.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "world", "quad"));
 }

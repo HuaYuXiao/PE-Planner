@@ -18,8 +18,8 @@
 #else
 #include "quadrotor_dynamics/nominal_quad_dynamic.hpp"
 #endif
-#include "bspline/uniform_bspline.hpp"
-#include "map/sdf.hpp"
+#include "bspline_opt/uniform_bspline.hpp"
+#include "plan_env/sdf.hpp"
 
 using namespace std;
 using namespace Eigen;

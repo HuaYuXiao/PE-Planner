@@ -22,19 +22,17 @@ __Authors__: Jiaxin Qiu, Qingchen Liu, Jiahu Qin, Dewang Cheng, Yawei Tian and Q
 </p>
 
 
-## Note on the correspondence between code and paper
-
-Kinodynamic path searching --> [kinodynamic_astar](https://github.com/USTC-AIS-Lab/PE-Planner/tree/master/modules/kinodynamic_astar)
-
-B-spline trajectory optimization --> [bspline_opt](https://github.com/USTC-AIS-Lab/PE-Planner/tree/master/modules/bspline_opt)
-
-Local planner (incluing MPCC and collision avoidance) --> [mpcc](https://github.com/USTC-AIS-Lab/PE-Planner/tree/master/modules/mpcc)
-
-GPIO --> [disturbance_observer](https://github.com/USTC-AIS-Lab/PE-Planner/tree/master/modules/disturbance_observer)
-
-
 ## Release Note
 
+- v1.1.2: remove node `map_viewer`
+- v1.1.1:
+  - remove node `map_generator`
+  - remove `publish_pose`, `publish_fanmesh`, `fan_ang`, `fanmesh_pub_`
+  - remove `test_num`, `TEST`
+  - remove `avg_avg_vel`, `avg_max_vel`, `avg_min_dist`
+  - remove `distur_set`, `distur_time_total`, `distur_time`
+  - set `online_replan` to true
+  - remove `plt`
 - v1.1.0: Get parameters from the ROS parameter server
 
 

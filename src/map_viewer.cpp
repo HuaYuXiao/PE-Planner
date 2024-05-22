@@ -5,7 +5,7 @@ int main(int argc, char **argv) {
     ros::init(argc, argv, "map_viewer");
 
     //构造地图
-    GridMap gridmap(argv[1]);
+    GridMap gridmap;
     gridmap.update_grid_map();
 
     //ros接口
